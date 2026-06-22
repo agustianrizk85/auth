@@ -1,0 +1,12 @@
+# env & secrets
+.env
+
+# Ed25519 signing keys — NEVER commit the private key.
+keys/
+*.pem
+
+# build output (root binaries only — NOT the cmd/server source dir)
+auth-server
+/server
+/devserver
+*.exe
