@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"greenpark/auth/internal/ai"
 	"greenpark/auth/internal/config"
 	"greenpark/auth/internal/domain"
 	"greenpark/auth/internal/keys"
@@ -72,6 +73,11 @@ func main() {
 	defer stopGC()
 
 	handler := httptransport.NewHandler(authSvc, userSvc, signer)
+	aiKeyFile := os.Getenv("OPENROUTER_KEY_FILE")
+	if aiKeyFile == "" {
+		aiKeyFile = "data/openrouter.key"
+	}
+	handler.SetAI(ai.New(os.Getenv("OPENROUTER_API_KEY"), os.Getenv("OPENROUTER_MODEL"), os.Getenv("OPENROUTER_SITE")).WithPersist(aiKeyFile))
 	router := httptransport.NewRouter(handler, cfg.Origins())
 
 	srv := &http.Server{

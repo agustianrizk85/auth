@@ -13,9 +13,11 @@ import (
 	"crypto/rand"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
+	"greenpark/auth/internal/ai"
 	"greenpark/auth/internal/config"
 	"greenpark/auth/internal/domain"
 	"greenpark/auth/internal/repository"
@@ -46,27 +48,66 @@ func main() {
 	authSvc := service.NewAuth(repo, signer, cfg.Issuer, cfg.AccessTTL, cfg.RefreshTTL, nil)
 	usersSvc := service.NewUsers(repo, authSvc, deptList, nil)
 
-	// Seed superadmin + cross-department admin/viewer (same as AUTH_SEED_DEMO).
+	// Seed the real Greenpark roster. Passwords MATCH each department backend's
+	// seed so the dashboard can bridge a native data token per logged-in person.
+	// Role strings use each department's own vocabulary (kadep/drafter/staff/…)
+	// which the dashboard UI reads directly; backend write-gating is unaffected.
 	active := true
-	adminRoles := map[string]domain.Role{}
-	viewerRoles := map[string]domain.Role{}
+	allViewer := map[string]domain.Role{}
 	for _, d := range deptList {
-		adminRoles[d.Code] = domain.RoleAdmin
-		viewerRoles[d.Code] = domain.RoleViewer
+		allViewer[d.Code] = domain.RoleViewer
 	}
+	r := func(dept, role string) map[string]domain.Role { return map[string]domain.Role{dept: domain.Role(role)} }
 	seed := []service.CreateInput{
+		// Auth admin API.
 		{Username: "superadmin", Name: "Super Admin", Password: "superadmin123", Super: true, Active: &active},
-		{Username: "admin", Name: "Admin Demo", Password: "admin123", Active: &active, Roles: adminRoles},
-		{Username: "viewer", Name: "Viewer Demo", Password: "viewer123", Active: &active, Roles: viewerRoles},
+		// ── Direktur (akses SEMUA divisi) ──
+		{Username: "ceo@greenpark.id", Email: "ceo@greenpark.id", Name: "Direktur Utama", Password: "ceo123", Active: &active, Roles: allViewer},          // overview-only
+		{Username: "dirops@greenpark.id", Email: "dirops@greenpark.id", Name: "Direktur Operasional", Password: "dirops123", Super: true, Active: &active}, // boleh approve
+		// ── Perencanaan ──
+		{Username: "kadep", Name: "Kepala Dept. Perencanaan", Password: "kadep123", Active: &active, Roles: r("perencanaan", "kadep")},
+		{Username: "randi", Name: "Randi", Password: "randi123", Active: &active, Roles: r("perencanaan", "drafter")},
+		{Username: "ananto", Name: "Ananto", Password: "ananto123", Active: &active, Roles: r("perencanaan", "drafter")},
+		{Username: "agus", Name: "Agus", Password: "agus123", Active: &active, Roles: r("perencanaan", "drafter")},
+		// ── Legal & Perizinan (Permit) ──
+		{Username: "kadep@greenpark.id", Email: "kadep@greenpark.id", Name: "Kepala Dept. Legal", Password: "kadep123", Active: &active, Roles: r("legalpermit", "kadep")},
+		{Username: "legal@greenpark.id", Email: "legal@greenpark.id", Name: "Staf Legal Permit", Password: "legal123", Active: &active, Roles: r("legalpermit", "legal_permit")},
+		// ── Marketing ──
+		{Username: "marketing@greenpark.id", Email: "marketing@greenpark.id", Name: "Kepala Dept. Marketing", Password: "kadep123", Active: &active, Roles: r("marketing", "kadep")},
+		{Username: "ichsan@greenpark.id", Email: "ichsan@greenpark.id", Name: "Ichsan", Password: "yqfZ2hWtMQ", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "sohee@greenpark.id", Email: "sohee@greenpark.id", Name: "Sohee", Password: "ByxZQnQ7Rc", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "mila@greenpark.id", Email: "mila@greenpark.id", Name: "Mila", Password: "QpkdKGfZcf", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "hilman@greenpark.id", Email: "hilman@greenpark.id", Name: "Hilman", Password: "PPWrxk7stW", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "hakim@greenpark.id", Email: "hakim@greenpark.id", Name: "Hakim", Password: "MazUSccPKC", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "hanif@greenpark.id", Email: "hanif@greenpark.id", Name: "Hanif", Password: "vrnzxpPsMg", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "ivan@greenpark.id", Email: "ivan@greenpark.id", Name: "Ivan", Password: "AVqhqec2ca", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "fatimah@greenpark.id", Email: "fatimah@greenpark.id", Name: "Fatimah", Password: "agHYVXCArP", Active: &active, Roles: r("marketing", "staff")},
+		{Username: "rahadian@greenpark.id", Email: "rahadian@greenpark.id", Name: "Rahadian", Password: "38fpPu2GtU", Active: &active, Roles: r("marketing", "staff")},
+		// ── Sales ──
+		{Username: "sales@greenpark.id", Email: "sales@greenpark.id", Name: "Kepala Dept. Sales", Password: "sales123", Active: &active, Roles: r("sales", "kadep")},
+		{Username: "viewer@greenpark.id", Email: "viewer@greenpark.id", Name: "Sales Viewer", Password: "viewer123", Active: &active, Roles: r("sales", "viewer")},
+		// ── Keuangan ──
+		{Username: "keuangan@greenpark.id", Email: "keuangan@greenpark.id", Name: "Kepala Dept. Keuangan", Password: "keuangan123", Active: &active, Roles: r("finance", "kadep")},
 	}
 	for _, in := range seed {
 		if _, err := usersSvc.EnsureUser(ctx, in); err != nil {
 			log.Fatalf("devserver: seed %q: %v", in.Username, err)
 		}
 	}
-	log.Println("devserver: seeded superadmin / admin(admin123) / viewer(viewer123)")
+	log.Printf("devserver: seeded %d Greenpark accounts (superadmin + direktur + 5 divisi)", len(seed))
 
 	handler := httptransport.NewHandler(authSvc, usersSvc, signer)
+	keyFile := os.Getenv("OPENROUTER_KEY_FILE")
+	if keyFile == "" {
+		keyFile = "data/openrouter.key"
+	}
+	aiClient := ai.New(os.Getenv("OPENROUTER_API_KEY"), os.Getenv("OPENROUTER_MODEL"), os.Getenv("OPENROUTER_SITE")).WithPersist(keyFile)
+	handler.SetAI(aiClient)
+	if aiClient.Configured() {
+		log.Printf("devserver: AI assistant ENABLED (model %s)", aiClient.Model())
+	} else {
+		log.Printf("devserver: AI assistant key belum diset — atur dari UI (PUT /api/ai/config) atau OPENROUTER_API_KEY")
+	}
 	router := httptransport.NewRouter(handler, cfg.Origins())
 	log.Printf("devserver (IN-MEMORY) auth API listening on http://localhost:%s", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, router); err != nil {

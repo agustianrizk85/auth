@@ -10,3 +10,7 @@ auth-server
 /server
 /devserver
 *.exe
+
+# AI assistant secret key (set via UI) + logs
+data/openrouter.key
+*.log

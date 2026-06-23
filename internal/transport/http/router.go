@@ -22,6 +22,13 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/auth/me", h.requireAuth(h.me))
 	mux.HandleFunc("POST /api/auth/logout-all", h.requireAuth(h.logoutAll))
 
+	// ---- cross-division AI assistant (any logged-in dashboard user) ----
+	mux.HandleFunc("GET /api/ai/config", h.requireAuth(h.aiConfigGet))
+	mux.HandleFunc("PUT /api/ai/config", h.requireAuth(h.aiConfigSet))
+	mux.HandleFunc("POST /api/ai/chat", h.requireAuth(h.aiChat))
+	// ---- AI orchestrator: 5-stage cross-division pipeline (directors) ----
+	mux.HandleFunc("POST /api/ai/orchestrate", h.requireAuth(h.aiOrchestrate))
+
 	// ---- administration (super only) ----
 	mux.HandleFunc("GET /api/admin/departments", h.requireSuper(h.listDepartments))
 	mux.HandleFunc("GET /api/admin/users", h.requireSuper(h.listUsers))

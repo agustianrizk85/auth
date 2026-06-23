@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"greenpark/auth/internal/ai"
 	"greenpark/auth/internal/domain"
 	"greenpark/auth/internal/repository"
 	"greenpark/auth/internal/service"
@@ -18,12 +19,17 @@ type Handler struct {
 	auth   *service.Auth
 	users  *service.Users
 	signer *token.Signer
+	ai     *ai.Client // cross-division dashboard assistant (nil = disabled)
 }
 
 // NewHandler creates a Handler bound to the services and the token signer.
 func NewHandler(auth *service.Auth, users *service.Users, signer *token.Signer) *Handler {
 	return &Handler{auth: auth, users: users, signer: signer}
 }
+
+// SetAI attaches the OpenRouter chat client that backs POST /api/ai/chat.
+// Kept separate from NewHandler so existing call sites (and tests) are unchanged.
+func (h *Handler) SetAI(c *ai.Client) { h.ai = c }
 
 /* ---------------------------- auth plumbing ---------------------------- */
 
