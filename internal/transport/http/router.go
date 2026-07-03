@@ -22,12 +22,22 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/auth/me", h.requireAuth(h.me))
 	mux.HandleFunc("POST /api/auth/logout-all", h.requireAuth(h.logoutAll))
 
+	// ---- department roster (any member of that department, or super) ----
+	// Lets a department dashboard build its staff / PIC list from the central
+	// identity store instead of a local seed.
+	mux.HandleFunc("GET /api/dept/{dept}/users", h.requireAuth(h.deptUsers))
+
 	// ---- cross-division AI assistant (any logged-in dashboard user) ----
 	mux.HandleFunc("GET /api/ai/config", h.requireAuth(h.aiConfigGet))
 	mux.HandleFunc("PUT /api/ai/config", h.requireAuth(h.aiConfigSet))
 	mux.HandleFunc("POST /api/ai/chat", h.requireAuth(h.aiChat))
 	// ---- AI orchestrator: 5-stage cross-division pipeline (directors) ----
 	mux.HandleFunc("POST /api/ai/orchestrate", h.requireAuth(h.aiOrchestrate))
+	// ---- Meta Ads multi-agent PKPSICOV generator (marketing) ----
+	// meta-plan: AI designs the expert panel (dynamic count); meta-agent runs one.
+	mux.HandleFunc("POST /api/ai/meta-plan", h.requireAuth(h.aiMetaPlan))
+	mux.HandleFunc("POST /api/ai/meta-agent", h.requireAuth(h.aiMetaAgent))
+	mux.HandleFunc("GET /api/ai/models", h.requireAuth(h.aiModels))
 
 	// ---- administration (super only) ----
 	mux.HandleFunc("GET /api/admin/departments", h.requireSuper(h.listDepartments))

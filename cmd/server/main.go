@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"greenpark/auth/internal/ai"
+	"greenpark/auth/internal/bootstrap"
 	"greenpark/auth/internal/config"
 	"greenpark/auth/internal/domain"
 	"greenpark/auth/internal/keys"
@@ -60,9 +61,10 @@ func main() {
 
 	// One-time seeding: department catalogue + bootstrap superadmin + optional
 	// cross-department demo accounts.
-	bootCtx, bootCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	bootCtx, bootCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	seedDepartments(bootCtx, repo, deptList)
 	bootstrapSuperadmin(bootCtx, repo, userSvc, cfg)
+	seedGreenparkRoster(bootCtx, userSvc, deptList)
 	if cfg.SeedDemo {
 		seedDemoUsers(bootCtx, userSvc, deptList, cfg)
 	}
@@ -73,11 +75,23 @@ func main() {
 	defer stopGC()
 
 	handler := httptransport.NewHandler(authSvc, userSvc, signer)
-	aiKeyFile := os.Getenv("OPENROUTER_KEY_FILE")
-	if aiKeyFile == "" {
-		aiKeyFile = "data/openrouter.key"
+	// Ollama Cloud AI provider (env OLLAMA_*); fall back to legacy OPENROUTER_*.
+	aiKey := os.Getenv("OLLAMA_API_KEY")
+	if aiKey == "" {
+		aiKey = os.Getenv("OPENROUTER_API_KEY")
 	}
-	handler.SetAI(ai.New(os.Getenv("OPENROUTER_API_KEY"), os.Getenv("OPENROUTER_MODEL"), os.Getenv("OPENROUTER_SITE")).WithPersist(aiKeyFile))
+	aiModel := os.Getenv("OLLAMA_MODEL")
+	if aiModel == "" {
+		aiModel = os.Getenv("OPENROUTER_MODEL")
+	}
+	aiKeyFile := os.Getenv("OLLAMA_KEY_FILE")
+	if aiKeyFile == "" {
+		aiKeyFile = os.Getenv("OPENROUTER_KEY_FILE")
+	}
+	if aiKeyFile == "" {
+		aiKeyFile = "data/ollama.key"
+	}
+	handler.SetAI(ai.New(aiKey, aiModel, os.Getenv("OLLAMA_ENDPOINT")).WithPersist(aiKeyFile))
 	router := httptransport.NewRouter(handler, cfg.Origins())
 
 	srv := &http.Server{
@@ -181,6 +195,27 @@ func seedDemoUsers(ctx context.Context, users *service.Users, depts []domain.Dep
 		if created {
 			log.Printf("auth: seeded demo user %q (roles in %d departments)", in.Username, len(in.Roles))
 		}
+	}
+}
+
+// seedGreenparkRoster persists the canonical department roster (shared with the
+// devserver) into Postgres. Idempotent: EnsureUser leaves existing accounts
+// untouched, so it is safe to run on every startup.
+func seedGreenparkRoster(ctx context.Context, users *service.Users, depts []domain.Department) {
+	roster := bootstrap.GreenparkRoster(depts)
+	created := 0
+	for _, in := range roster {
+		wasNew, err := users.EnsureUser(ctx, in)
+		if err != nil {
+			log.Printf("auth: seed roster %q: %v", in.Username, err)
+			continue
+		}
+		if wasNew {
+			created++
+		}
+	}
+	if created > 0 {
+		log.Printf("auth: seeded %d new roster accounts (of %d)", created, len(roster))
 	}
 }
 

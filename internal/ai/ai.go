@@ -1,8 +1,10 @@
-// Package ai is a thin OpenRouter (https://openrouter.ai) chat client used by
-// the dashboard's cross-division AI assistant. It is provider-agnostic to the
-// caller: the handler builds the grounded system prompt + conversation and this
-// package just relays it. When no API key is configured the caller surfaces a
-// friendly "AI belum dikonfigurasi" message.
+// Package ai is a thin Ollama Cloud (https://ollama.com) chat client used by the
+// dashboard's AI features (cross-division assistant, orchestrator, and the Meta
+// Ads multi-agent generator). Ollama Cloud exposes an OpenAI-compatible chat
+// endpoint, so the request/response shapes mirror the OpenAI spec. It is
+// provider-agnostic to the caller: the handler builds the grounded prompt +
+// conversation and this package just relays it. When no API key is configured
+// the caller surfaces a friendly "AI belum dikonfigurasi" message.
 package ai
 
 import (
@@ -18,7 +20,11 @@ import (
 	"time"
 )
 
-const endpoint = "https://openrouter.ai/api/v1/chat/completions"
+// defaultEndpoint is Ollama Cloud's OpenAI-compatible chat completions URL.
+const defaultEndpoint = "https://ollama.com/v1/chat/completions"
+
+// defaultModel is a strong general model available on Ollama Cloud.
+const defaultModel = "glm-5.2:cloud"
 
 // Message is one chat turn (role: system | user | assistant).
 type Message struct {
@@ -26,28 +32,32 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Client calls OpenRouter chat completions. The API key and model are mutable
+// Client calls Ollama Cloud chat completions. The API key and model are mutable
 // at runtime (set from the dashboard UI) and optionally persisted to a file.
 type Client struct {
-	mu      sync.RWMutex
-	key     string
-	model   string
-	site    string
-	keyFile string // optional persistence path ("" = in-memory only)
-	http    *http.Client
+	mu       sync.RWMutex
+	key      string
+	model    string
+	endpoint string
+	keyFile  string // optional persistence path ("" = in-memory only)
+	http     *http.Client
 }
 
-const defaultModel = "openai/gpt-oss-120b:free"
-
 // New builds a client. It is always non-nil; Configured() reports usability.
-func New(key, model, site string) *Client {
+// endpoint may be empty to use Ollama Cloud's default OpenAI-compatible URL.
+func New(key, model, endpoint string) *Client {
 	if strings.TrimSpace(model) == "" {
 		model = defaultModel
 	}
-	if strings.TrimSpace(site) == "" {
-		site = "http://localhost"
+	if strings.TrimSpace(endpoint) == "" {
+		endpoint = defaultEndpoint
 	}
-	return &Client{key: strings.TrimSpace(key), model: model, site: site, http: &http.Client{Timeout: 110 * time.Second}}
+	return &Client{
+		key:      strings.TrimSpace(key),
+		model:    model,
+		endpoint: endpoint,
+		http:     &http.Client{Timeout: 110 * time.Second},
+	}
 }
 
 // WithPersist points the client at a file used to persist a UI-set key so it
@@ -107,6 +117,7 @@ type chatRequest struct {
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature"`
 	MaxTokens   int       `json:"max_tokens"`
+	Stream      bool      `json:"stream"`
 }
 
 type chatResponse struct {
@@ -120,21 +131,35 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-// Chat sends the conversation (already including the system prompt) to the model
-// and returns the assistant's reply text.
+// Chat sends the conversation (already including the system prompt) to the
+// active model and returns the assistant's reply text.
 func (c *Client) Chat(ctx context.Context, msgs []Message) (string, error) {
+	return c.ChatModel(ctx, msgs, "")
+}
+
+// ChatModel is like Chat but overrides the model for this single call when
+// modelOverride is non-empty (used for per-run dynamic model selection). The
+// client's default model and the configured key are unchanged.
+func (c *Client) ChatModel(ctx context.Context, msgs []Message, modelOverride string) (string, error) {
 	c.mu.RLock()
-	key, model := c.key, c.model
+	key, model, endpoint := c.key, c.model, c.endpoint
 	c.mu.RUnlock()
+	if m := strings.TrimSpace(modelOverride); m != "" {
+		model = m
+	}
 	if key == "" {
-		return "", fmt.Errorf("OpenRouter belum dikonfigurasi (set API key)")
+		return "", fmt.Errorf("Ollama belum dikonfigurasi (set API key)")
 	}
 
 	reqBody, _ := json.Marshal(chatRequest{
 		Model:       model,
 		Temperature: 0.4,
-		MaxTokens:   900,
-		Messages:    msgs,
+		// Reasoning models (e.g. glm-5.2) spend tokens "thinking" before the
+		// visible answer; a low cap truncated the final content to empty. Give
+		// enough headroom so the synthesis JSON always completes.
+		MaxTokens: 8000,
+		Stream:    false,
+		Messages:  msgs,
 	})
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
@@ -143,8 +168,7 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, error) {
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+key)
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("HTTP-Referer", c.site)
-	httpReq.Header.Set("X-Title", "Greenpark Dashboard Assistant")
+	httpReq.Header.Set("X-Title", "Greenpark Dashboard AI")
 
 	res, err := c.http.Do(httpReq)
 	if err != nil {
@@ -154,17 +178,93 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, error) {
 
 	var parsed chatResponse
 	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("OpenRouter: gagal baca respons: %w", err)
+		return "", fmt.Errorf("Ollama: gagal baca respons: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
 		msg := "status " + res.Status
 		if parsed.Error != nil {
 			msg = parsed.Error.Message
 		}
-		return "", fmt.Errorf("OpenRouter %d: %s", res.StatusCode, msg)
+		return "", fmt.Errorf("Ollama %d: %s", res.StatusCode, msg)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("OpenRouter: respons kosong")
+		return "", fmt.Errorf("Ollama: respons kosong")
 	}
-	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+	return stripThink(parsed.Choices[0].Message.Content), nil
+}
+
+// stripThink removes <think>…</think> reasoning blocks some models emit inline,
+// leaving only the final answer. Tolerates an unclosed tag (drops to end).
+func stripThink(s string) string {
+	for {
+		i := strings.Index(s, "<think>")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i:], "</think>")
+		if j < 0 {
+			s = s[:i] // unclosed: drop the rest
+			break
+		}
+		s = s[:i] + s[i+j+len("</think>"):]
+	}
+	return strings.TrimSpace(s)
+}
+
+// modelsEndpoint derives the OpenAI-compatible models URL from the chat endpoint
+// (…/chat/completions → …/models).
+func modelsEndpoint(chat string) string {
+	if i := strings.LastIndex(chat, "/chat/completions"); i >= 0 {
+		return chat[:i] + "/models"
+	}
+	return "https://ollama.com/v1/models"
+}
+
+// Models lists the model ids available to the configured key (dynamic model
+// picker). Returns an error when no key is set.
+func (c *Client) Models(ctx context.Context) ([]string, error) {
+	c.mu.RLock()
+	key, endpoint := c.key, c.endpoint
+	c.mu.RUnlock()
+	if key == "" {
+		return nil, fmt.Errorf("Ollama belum dikonfigurasi (set API key)")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpoint(endpoint), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("Ollama: gagal baca daftar model: %w", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		msg := "status " + res.Status
+		if parsed.Error != nil {
+			msg = parsed.Error.Message
+		}
+		return nil, fmt.Errorf("Ollama %d: %s", res.StatusCode, msg)
+	}
+	out := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if id := strings.TrimSpace(m.ID); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }

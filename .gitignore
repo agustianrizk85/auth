@@ -10,7 +10,11 @@ auth-server
 /server
 /devserver
 *.exe
+*.exe~
 
-# AI assistant secret key (set via UI) + logs
-data/openrouter.key
+# AI assistant secret key (set via UI) + runtime data/logs
+# NOTE: keys are named data/openrouter.key OR data/ollama.key — never commit any.
+/data/
+local.err
+local.out
 *.log

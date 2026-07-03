@@ -204,6 +204,26 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, users)
 }
 
+// deptUsers returns the roster of one department. Any authenticated member of
+// that department (or a super user) may read it — used by dashboards to build
+// their PIC / staff list from the central identity store.
+func (h *Handler) deptUsers(w http.ResponseWriter, r *http.Request) {
+	dept := r.PathValue("dept")
+	c := claimsOf(r)
+	if !c.Super {
+		if _, ok := c.Roles[dept]; !ok {
+			writeError(w, http.StatusForbidden, "bukan anggota departemen")
+			return
+		}
+	}
+	users, err := h.users.ListByDept(r.Context(), dept)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
 func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 	u, err := h.users.Get(r.Context(), r.PathValue("id"))
 	if err != nil {

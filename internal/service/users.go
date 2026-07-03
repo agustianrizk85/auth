@@ -180,6 +180,24 @@ func (s *Users) List(ctx context.Context) ([]domain.User, error) {
 	return users, nil
 }
 
+// ListByDept returns the accounts that hold an explicit role in the given
+// department — the department's roster. Super users are omitted (they are not
+// department members). Backs the per-department roster a dashboard needs
+// (e.g. the perencanaan PIC list) without granting super access.
+func (s *Users) ListByDept(ctx context.Context, dept string) ([]domain.User, error) {
+	all, err := s.repo.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.User{}
+	for _, u := range all {
+		if _, ok := u.Roles[dept]; ok {
+			out = append(out, sanitize(u))
+		}
+	}
+	return out, nil
+}
+
 // Get returns a single user without password data.
 func (s *Users) Get(ctx context.Context, id string) (domain.User, error) {
 	u, err := s.repo.UserByID(ctx, id)
