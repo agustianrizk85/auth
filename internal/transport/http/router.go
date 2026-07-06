@@ -37,6 +37,12 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	// meta-plan: AI designs the expert panel (dynamic count); meta-agent runs one.
 	mux.HandleFunc("POST /api/ai/meta-plan", h.requireAuth(h.aiMetaPlan))
 	mux.HandleFunc("POST /api/ai/meta-agent", h.requireAuth(h.aiMetaAgent))
+	// ---- Generic per-division multi-agent analysis ("Generate AI" on every
+	// dashboard). Same shape as meta-* but division-agnostic: analyze-plan designs
+	// the expert panel for a division snapshot; analyze-agent runs one expert (or
+	// the built-in synthesis finalizer that returns the executive dashboard JSON).
+	mux.HandleFunc("POST /api/ai/analyze-plan", h.requireAuth(h.aiAnalyzePlan))
+	mux.HandleFunc("POST /api/ai/analyze-agent", h.requireAuth(h.aiAnalyzeAgent))
 	mux.HandleFunc("GET /api/ai/models", h.requireAuth(h.aiModels))
 
 	// ---- administration (super only) ----

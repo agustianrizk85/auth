@@ -512,6 +512,199 @@ func parsePlan(out string) []plannedAgent {
 	return cleaned
 }
 
+// ---- Generic per-division multi-agent analysis ("Generate AI" everywhere) ----
+//
+// Same shape/flow as the Meta Ads pipeline above, but division-agnostic: the
+// planner designs an expert panel for one division's snapshot, each expert runs
+// the PKPSICOV frame, and the built-in `synthesis` finalizer returns the same
+// executive-dashboard JSON ({title,kpis,sections}) the frontend already renders.
+
+type analyzePlanRequest struct {
+	Division string          `json:"division"` // slug (sales, keuangan, …) — for logging
+	Label    string          `json:"label"`    // human division name — used in prompts
+	Model    string          `json:"model"`
+	Data     json.RawMessage `json:"data"` // compact division dashboard snapshot
+}
+
+// aiAnalyzePlan lets the AI design the expert panel for a division snapshot.
+// Returns 2–5 analyst agents (never the synthesis finalizer). Gated by requireAuth.
+func (h *Handler) aiAnalyzePlan(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil || !h.ai.Configured() {
+		writeError(w, http.StatusServiceUnavailable, "AI belum dikonfigurasi. Set OLLAMA_API_KEY pada service auth.")
+		return
+	}
+	var req analyzePlanRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
+		return
+	}
+	label := firstNonEmpty(strings.TrimSpace(req.Label), strings.TrimSpace(req.Division), "Divisi")
+
+	var b strings.Builder
+	b.WriteString("Kamu adalah Kepala Divisi " + label + " Greenpark Group yang MEMIMPIN panel AI untuk menganalisis data operasional divisi ini.\n")
+	b.WriteString("TUGASMU: merancang panel ahli yang PALING RELEVAN untuk data divisi di bawah. ")
+	b.WriteString("KAMU yang menentukan BERAPA banyak ahli (antara 2 sampai 5) dan bidang apa saja — sesuaikan dengan kondisi data, JANGAN paksakan jumlah tetap.\n")
+	b.WriteString("Untuk tiap ahli tulis kerangka PKPSICOV (Peranan, Kompetensi, Instruksi, Output).\n\n")
+	b.WriteString("Balas HANYA JSON valid (tanpa markdown/code fence), bentuk PERSIS:\n")
+	b.WriteString(`{"agents":[{"key":"slug-unik","title":"Nama Peran","icon":"satu emoji","peranan":"...","kompetensi":"...","instruksi":"analisis spesifik, wajib menyebut angka nyata","output":"format ringkas, maks 180 kata"}]}` + "\n")
+	b.WriteString("Aturan: 2-5 ahli, HANYA yang relevan dengan data ini; instruksi berbasis angka nyata; Bahasa Indonesia; JANGAN sertakan agent sintesis/kesimpulan akhir (ditangani terpisah).\n")
+
+	data := strings.TrimSpace(string(req.Data))
+	if data != "" && data != "null" {
+		if len(data) > maxContextChars {
+			data = data[:maxContextChars] + " …(dipotong)"
+		}
+		b.WriteString("\nDATA DIVISI " + strings.ToUpper(label) + " (JSON, sumber kebenaran):\n" + data + "\n")
+	}
+
+	msgs := []ai.Message{
+		{Role: "system", Content: b.String()},
+		{Role: "user", Content: "Rancang panel ahli untuk data divisi " + label + " ini sekarang. Balas hanya JSON."},
+	}
+	out, err := h.ai.ChatModel(r.Context(), msgs, strings.TrimSpace(req.Model))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "AI gagal: "+err.Error())
+		return
+	}
+	agents := parsePlan(out)
+	if len(agents) == 0 {
+		writeJSON(w, http.StatusOK, metaPlanResponse{Agents: defaultAnalyzePlan(label), Fallback: true})
+		return
+	}
+	writeJSON(w, http.StatusOK, metaPlanResponse{Agents: agents})
+}
+
+// defaultAnalyzePlan is a generic resilient fallback panel for any division,
+// used when the planner output can't be parsed so the pipeline never breaks.
+func defaultAnalyzePlan(label string) []plannedAgent {
+	return []plannedAgent{
+		{
+			Key: "kinerja", Title: "Analis Kinerja", Icon: "📊",
+			Peranan:    "Analis kinerja operasional divisi " + label + " Greenpark, berpengalaman.",
+			Kompetensi: "Membaca KPI, tren, dan capaian vs target dari data divisi.",
+			Instruksi:  "Analisis capaian & tren utama divisi. Sebut angka nyata & bandingkan dengan target bila ada.",
+			Output:     "3-5 temuan ringkas berpoin dengan angka. Maksimal 180 kata.",
+		},
+		{
+			Key: "risiko", Title: "Auditor Risiko", Icon: "⚠",
+			Peranan:    "Auditor internal yang mengidentifikasi risiko & hambatan divisi " + label + ".",
+			Kompetensi: "Menemukan anomali, keterlambatan, bottleneck, dan risiko dari data.",
+			Instruksi:  "Identifikasi masalah & risiko paling kritis. Sebut akar masalah + angka pendukung, urut paling kritis.",
+			Output:     "3-5 risiko berpoin. Maksimal 180 kata.",
+		},
+		{
+			Key: "rekomendasi", Title: "Strategist Aksi", Icon: "🎯",
+			Peranan:    "Strategist yang merumuskan aksi konkret untuk divisi " + label + ".",
+			Kompetensi: "Menerjemahkan temuan jadi langkah prioritas yang actionable.",
+			Instruksi:  "Rekomendasikan 3-5 aksi prioritas konkret berdasarkan data & temuan. Sebut arah angka/target.",
+			Output:     "Daftar aksi prioritas berpoin. Maksimal 180 kata.",
+		},
+	}
+}
+
+type analyzeAgentRequest struct {
+	Division string          `json:"division"`
+	Label    string          `json:"label"`
+	Agent    string          `json:"agent"` // "synthesis" (built-in) OR a dynamic id
+	Model    string          `json:"model"`
+	Data     json.RawMessage `json:"data"`
+	Prior    json.RawMessage `json:"prior"`
+	// Inline PKPSICOV frame for a dynamic agent decided by the planner.
+	Title      string `json:"title"`
+	Peranan    string `json:"peranan"`
+	Kompetensi string `json:"kompetensi"`
+	Instruksi  string `json:"instruksi"`
+	Output     string `json:"output"`
+}
+
+// aiAnalyzeAgent runs one expert (or the built-in synthesis finalizer) of the
+// generic division analysis, grounded on the division snapshot + prior outputs.
+func (h *Handler) aiAnalyzeAgent(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil || !h.ai.Configured() {
+		writeError(w, http.StatusServiceUnavailable, "AI belum dikonfigurasi. Set OLLAMA_API_KEY pada service auth.")
+		return
+	}
+	var req analyzeAgentRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
+		return
+	}
+	label := firstNonEmpty(strings.TrimSpace(req.Label), strings.TrimSpace(req.Division), "Divisi")
+
+	var ag metaAgentFrame
+	switch {
+	case strings.EqualFold(strings.TrimSpace(req.Agent), "synthesis"):
+		ag = analyzeSynthesisFrame(label)
+	case strings.TrimSpace(req.Instruksi) != "" || strings.TrimSpace(req.Peranan) != "":
+		ag = metaAgentFrame{
+			title:      firstNonEmpty(req.Title, req.Agent, "Ahli"),
+			peranan:    req.Peranan,
+			kompetensi: req.Kompetensi,
+			instruksi:  req.Instruksi,
+			output:     firstNonEmpty(req.Output, "3-5 temuan ringkas berpoin dengan angka pendukung. Maksimal 180 kata."),
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "agent tidak dikenal & tidak ada spec dinamis: "+req.Agent)
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString("Kamu adalah salah satu AHLI dalam panel AI divisi " + label + " Greenpark Group. ")
+	b.WriteString("Bahasa Indonesia, ringkas, profesional, berbasis angka — JANGAN mengarang data.\n\n")
+	b.WriteString("Gunakan kerangka PKPSICOV:\n")
+	b.WriteString("- PERANAN: " + ag.peranan + "\n")
+	b.WriteString("- KOMPETENSI: " + ag.kompetensi + "\n")
+	b.WriteString("- SKENARIO: Direksi/Kepala Divisi " + label + " Greenpark mengevaluasi kinerja divisi (properti, Rupiah). Data dilampirkan.\n")
+	b.WriteString("- INSTRUKSI: " + ag.instruksi + "\n")
+	b.WriteString("- CONSTRAINTS: Hanya angka dari data terlampir. Rupiah (IDR), konteks properti Indonesia. Tandai bila data kosong.\n")
+	b.WriteString("- OUTPUT: " + ag.output + "\n")
+	b.WriteString("- VALIDATION: Tandai temuan yang perlu dicek lebih lanjut; jangan berasumsi di luar data.\n")
+
+	data := strings.TrimSpace(string(req.Data))
+	if data != "" && data != "null" {
+		if len(data) > maxContextChars {
+			data = data[:maxContextChars] + " …(dipotong)"
+		}
+		b.WriteString("\nDATA DIVISI " + strings.ToUpper(label) + " (JSON, sumber kebenaran):\n" + data + "\n")
+	}
+	prior := strings.TrimSpace(string(req.Prior))
+	if prior != "" && prior != "null" && prior != "{}" {
+		if len(prior) > 6000 {
+			prior = prior[:6000] + " …(dipotong)"
+		}
+		b.WriteString("\nHASIL AHLI SEBELUMNYA (pertimbangkan & bangun di atasnya):\n" + prior + "\n")
+	}
+
+	msgs := []ai.Message{
+		{Role: "system", Content: b.String()},
+		{Role: "user", Content: "Kerjakan peran \"" + ag.title + "\" sekarang."},
+	}
+	out, err := h.ai.ChatModel(r.Context(), msgs, strings.TrimSpace(req.Model))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "AI gagal: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, metaAgentResponse{Agent: req.Agent, Output: out})
+}
+
+// analyzeSynthesisFrame is the generic executive-dashboard finalizer for any division.
+func analyzeSynthesisFrame(label string) metaAgentFrame {
+	return metaAgentFrame{
+		title:      "Kepala Divisi " + label + " — Sintesis",
+		peranan:    "Kepala Divisi " + label + " yang memimpin panel ahli di atas dan memutuskan untuk direksi.",
+		kompetensi: "Menggabungkan analisis kinerja, risiko, dan rekomendasi jadi satu dashboard eksekutif actionable.",
+		instruksi: `Sintesis SEMUA hasil ahli + data jadi DASHBOARD EKSEKUTIF divisi ` + label + `.
+Balas HANYA JSON valid (tanpa markdown/code fence), bentuk:
+{
+  "title": "judul ringkas",
+  "kpis": [ {"label":"...", "value":"...", "note":"konteks singkat", "tone":"ok|warn|bad|neutral"} ],
+  "sections": [ {"heading":"...", "items":[ {"title":"...", "detail":"1 kalimat", "tone":"ok|warn|bad|neutral"} ]} ]
+}
+Aturan: 4-8 KPI dari angka NYATA (format Rupiah bila uang); sections wajib mencakup "Sorotan", "Temuan per Ahli", "Rekomendasi Prioritas"; ringkas & actionable; JANGAN mengarang angka.`,
+		output: "HANYA JSON dashboard sesuai format di atas.",
+	}
+}
+
 // aiModels lists the model ids available to the configured Ollama key so the UI
 // can offer a dynamic model picker. Gated by requireAuth.
 func (h *Handler) aiModels(w http.ResponseWriter, r *http.Request) {
