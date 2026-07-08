@@ -9,18 +9,18 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"greenpark/auth/internal/ai"
 	"greenpark/auth/internal/bootstrap"
 	"greenpark/auth/internal/config"
 	"greenpark/auth/internal/domain"
+	"greenpark/auth/internal/keys"
 	"greenpark/auth/internal/repository"
 	"greenpark/auth/internal/service"
 	"greenpark/auth/internal/token"
@@ -30,12 +30,30 @@ import (
 func main() {
 	cfg := config.Load()
 
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	// PERSISTENT signing key (same key file cmd/server uses, keys/, gitignored).
+	// Previously the devserver generated an EPHEMERAL key every start, so each
+	// restart/deploy invalidated everyone's token → mass 401 "logged out". With a
+	// persistent key the stateless access tokens stay valid across restarts.
+	priv, created, err := keys.LoadOrCreate(cfg.PrivateKeyPath, cfg.PublicKeyPath)
 	if err != nil {
-		log.Fatalf("devserver: genkey: %v", err)
+		log.Fatalf("devserver: load/create signing key: %v", err)
 	}
 	signer := token.NewSigner(priv)
-	log.Printf("devserver: ephemeral signing key (kid=%s)", signer.KID())
+	if created {
+		log.Printf("devserver: generated NEW persistent signing key (kid=%s) at %s", signer.KID(), cfg.PrivateKeyPath)
+	} else {
+		log.Printf("devserver: loaded persistent signing key (kid=%s)", signer.KID())
+	}
+
+	// Long-lived access tokens: the devserver has no frontend refresh flow and its
+	// (in-memory) refresh tokens don't survive a restart anyway, so a 15-min TTL
+	// would just log everyone out repeatedly. Honor an explicit AUTH_ACCESS_TTL if
+	// it's already long; otherwise default to 30 days.
+	accessTTL := cfg.AccessTTL
+	if accessTTL < 24*time.Hour {
+		accessTTL = 30 * 24 * time.Hour
+	}
+	log.Printf("devserver: access-token TTL = %s", accessTTL)
 
 	repo := newMemRepo()
 	ctx := context.Background()
@@ -46,7 +64,7 @@ func main() {
 		_ = repo.UpsertDepartment(ctx, dd)
 	}
 
-	authSvc := service.NewAuth(repo, signer, cfg.Issuer, cfg.AccessTTL, cfg.RefreshTTL, nil)
+	authSvc := service.NewAuth(repo, signer, cfg.Issuer, accessTTL, cfg.RefreshTTL, nil)
 	usersSvc := service.NewUsers(repo, authSvc, deptList, nil)
 
 	// Seed the real Greenpark roster. Passwords MATCH each department backend's
