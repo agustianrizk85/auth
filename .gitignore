@@ -1,8 +1,9 @@
 # env & secrets
 .env
 
-# Ed25519 signing keys — NEVER commit the private key.
-keys/
+# Ed25519 signing keys — NEVER commit the private key. Root-anchored so it does
+# NOT also ignore the internal/keys/ SOURCE package (which broke cmd/server build).
+/keys/
 *.pem
 
 # build output (root binaries only — NOT the cmd/server source dir)
