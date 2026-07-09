@@ -26,11 +26,21 @@ import (
 )
 
 // maxDeepAgents caps the research panel; with the synthesis finalizer appended
-// by the frontend the pipeline never exceeds 10 agents total.
-const maxDeepAgents = 9
+// by the frontend the pipeline never exceeds 20 agents total.
+const maxDeepAgents = 19
 
-// maxToolSteps bounds how many search/open actions one agent may take.
-const maxToolSteps = 5
+// maxToolSteps bounds how many search/open actions one agent may take in its
+// first research round.
+const maxToolSteps = 8
+
+// maxRetryRounds: when an agent with an external-research mandate tries to
+// finish WITHOUT having opened a single source, the server refuses the final
+// and sends it back to research with a fresh query strategy — up to this many
+// times, each adding retryExtraSteps to the tool budget.
+const maxRetryRounds = 2
+
+// retryExtraSteps is the extra tool budget granted per refused final.
+const retryExtraSteps = 5
 
 // maxSkillChars caps the concatenated skill text embedded in every prompt.
 const maxSkillChars = 9000
@@ -152,10 +162,10 @@ func defaultDeepPlan() []deepPlannedAgent {
 			Riset:      []string{"Meta Ads benchmark real estate CTR CPM 2026", "biaya iklan properti Facebook Instagram Indonesia 2026"}},
 		{Key: "pasar", Title: "Riset Pasar Properti", Icon: "🏘",
 			Peranan:    "Analis pasar properti residensial Indonesia.",
-			Kompetensi: "Tren permintaan rumah tapak, KPR/suku bunga, area Tangerang/Serpong.",
+			Kompetensi: "Tren permintaan rumah tapak, KPR/suku bunga, area Jabodetabek.",
 			Instruksi:  "Cari kondisi pasar terkini (suku bunga KPR, tren pencarian rumah, insentif pemerintah) dan kaitkan dengan strategi iklan Greenpark.",
 			Output:     "3-5 temuan pasar bersitasi + implikasi ke targeting/pesan iklan. Maks 220 kata.",
-			Riset:      []string{"suku bunga KPR Indonesia Juli 2026", "tren pasar rumah tapak Tangerang 2026"}},
+			Riset:      []string{"suku bunga KPR Indonesia Juli 2026", "tren pasar rumah tapak Jabodetabek 2026"}},
 		{Key: "kreatif", Title: "Auditor Kreatif & Copy", Icon: "✍",
 			Peranan:    "Creative strategist iklan properti.",
 			Kompetensi: "CTR lemah, ad fatigue (frequency), angle/hook copy pasar properti Indonesia.",
@@ -187,9 +197,10 @@ func (h *Handler) aiDeepPlan(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString("Kamu adalah Head of Marketing Greenpark yang memimpin DEEP ANALYSIS: riset mendalam iklan Meta Ads properti (Rupiah) dengan panel agent riset.\n")
 	b.WriteString("TUGASMU: merancang panel agent riset PALING RELEVAN untuk data & fokus di bawah. ")
-	b.WriteString("KAMU menentukan jumlah agent antara 3 sampai " + strconv.Itoa(maxDeepAgents) + " — sesuaikan kompleksitas data, JANGAN paksakan jumlah tetap.\n")
-	b.WriteString("Setiap agent bisa MERISET INTERNET (search + buka halaman) — untuk agent yang butuh data eksternal, isi `riset` dengan 1-3 query pencarian spesifik (sertakan tahun & konteks Indonesia). Agent yang murni analisis data internal boleh `riset` kosong.\n")
-	b.WriteString("Cakup minimal: performa data internal, benchmark/validasi eksternal, dan rekomendasi aksi. Bidang lain (pasar properti, kompetitor, kreatif, kualitas lead, musiman) hanya bila relevan.\n\n")
+	b.WriteString("KAMU menentukan jumlah agent antara 3 sampai " + strconv.Itoa(maxDeepAgents) + " — sesuaikan kompleksitas data & fokus (data kompleks/fokus luas → panel besar; data sederhana → panel kecil), JANGAN paksakan jumlah tetap.\n")
+	b.WriteString("Organisasikan panel dalam beberapa kelompok kerja, misalnya: (1) performa data internal per dimensi (funnel, per-proyek, per-objective), (2) riset eksternal (benchmark industri, pasar properti Jabodetabek, kompetitor, tren musiman), (3) diagnosis kreatif & kualitas lead, (4) strategi aksi & realokasi. Boleh beberapa agent per kelompok bila datanya kaya.\n")
+	b.WriteString("Setiap agent bisa MERISET INTERNET (search + buka halaman) — untuk agent yang butuh data eksternal, isi `riset` dengan 1-3 query pencarian spesifik (sertakan tahun & konteks Indonesia/Jabodetabek). Agent yang murni analisis data internal boleh `riset` kosong.\n")
+	b.WriteString("Cakup minimal: performa data internal, benchmark/validasi eksternal, dan rekomendasi aksi.\n\n")
 	b.WriteString("Balas HANYA JSON valid (tanpa markdown/code fence), bentuk PERSIS:\n")
 	b.WriteString(`{"agents":[{"key":"slug-unik","title":"Nama Peran","icon":"satu emoji","peranan":"...","kompetensi":"...","instruksi":"analisis/riset spesifik berbasis angka nyata","output":"format ringkas, maks 220 kata","riset":["query pencarian opsional"]}]}` + "\n")
 	b.WriteString("Aturan: 3-" + strconv.Itoa(maxDeepAgents) + " agent; Bahasa Indonesia; JANGAN sertakan agent sintesis (ditangani terpisah).\n")
@@ -372,7 +383,7 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 		b.WriteString("Kamu adalah finalizer DEEP ANALYSIS Marketing Greenpark. Bahasa Indonesia, berbasis angka — JANGAN mengarang data/sumber.\n\n")
 		writeFrame(&b, ag)
 		b.WriteString("\nSKILL (metodologi yang dipatuhi seluruh panel):\n" + skills + "\n")
-		writeDeepContext(&b, req, 12000)
+		writeDeepContext(&b, req, 26000)
 		if len(req.Sources) > 0 {
 			if sj, err := json.Marshal(req.Sources); err == nil {
 				b.WriteString("\nSUMBER YANG DIPAKAI PARA AGENT (untuk sitasi):\n" + string(sj) + "\n")
@@ -409,12 +420,17 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("Bahasa Indonesia, profesional, berbasis angka — JANGAN mengarang data/sumber.\n\n")
 	writeFrame(&b, ag)
 	b.WriteString("\nSKILL (WAJIB dipatuhi — metodologi & sumber kredibel):\n" + skills + "\n")
-	b.WriteString("\nTOOLS RISET INTERNET — kamu punya maksimal " + strconv.Itoa(maxToolSteps) + " langkah tool. Tiap giliran balas HANYA SATU objek JSON (tanpa teks lain):\n")
+	b.WriteString("\nTOOLS RISET INTERNET — tiap giliran balas HANYA SATU objek JSON (tanpa teks lain):\n")
 	b.WriteString(`- Cari web:    {"tool":"search","query":"query spesifik + tahun + Indonesia"}` + "\n")
 	b.WriteString(`- Buka halaman: {"tool":"open","url":"https://..."}` + "\n")
 	b.WriteString(`- Selesai:      {"final":"analisis lengkapmu sesuai OUTPUT di atas, dengan sitasi (sumber: situs, tahun)"}` + "\n")
-	b.WriteString("Gunakan tool HANYA bila butuh data eksternal; bila data internal cukup, langsung balas final. Hasil tool dikirim balik sebagai pesan berikutnya.\n")
+	b.WriteString("Hasil tool dikirim balik sebagai pesan berikutnya. Agent murni data internal boleh langsung final.\n")
 	if len(req.Riset) > 0 {
+		b.WriteString("\nMANDAT RISET EKSTERNAL — kamu WAJIB GIGIH:\n")
+		b.WriteString("- JANGAN kirim final sebelum minimal 1 halaman sumber kredibel BERHASIL dibuka (open sukses). Final tanpa sumber akan DITOLAK dan kamu disuruh riset ulang.\n")
+		b.WriteString("- Bila query gagal/tidak relevan, JANGAN berhenti — eskalasi bertahap: (1) variasikan istilah, (2) ganti ke bahasa Inggris, (3) perluas cakupan Jabodetabek → Indonesia → Asia Tenggara → global, (4) ganti sudut data (mis. benchmark CPL gagal → cari CPM/CTR industri, laporan pasar properti, data suku bunga/permintaan).\n")
+		b.WriteString("- Bila halaman gagal dibuka, buka hasil search lain — jangan menyerah pada 1 URL.\n")
+		b.WriteString("- Bila topik utama benar-benar buntu, PIVOT: cari data relevan terdekat yang kredibel dan tetap kaitkan ke tugasmu; sebutkan pivot itu eksplisit di final.\n")
 		b.WriteString("Saran query awal dari perencana: " + strings.Join(req.Riset, " | ") + "\n")
 	}
 	writeDeepContext(&b, req, 6000)
@@ -424,13 +440,20 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 		{Role: "user", Content: "Mulai kerjakan peran \"" + ag.title + "\" sekarang. Balas hanya satu objek JSON."},
 	}
 
+	// An agent whose plan includes research queries has an EXTERNAL mandate:
+	// it may not finish without at least one successfully opened source.
+	needsExternal := len(req.Riset) > 0
+
 	steps := make([]deepStep, 0, maxToolSteps)
 	sources := make([]deepSource, 0, 8)
 	seenSrc := map[string]bool{}
 	final := ""
 	toolUsed := 0
+	toolBudget := maxToolSteps
+	retries := 0
 
-	for turn := 0; turn < maxToolSteps+3; turn++ {
+	maxTurns := maxToolSteps + maxRetryRounds*retryExtraSteps + 6
+	for turn := 0; turn < maxTurns; turn++ {
 		out, err := h.ai.ChatModel(r.Context(), msgs, model)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "AI gagal: "+err.Error())
@@ -438,13 +461,27 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		act := parseDeepAction(out)
 		if strings.TrimSpace(act.Final) != "" || act.Tool == "" {
+			// Refuse a source-less final from an external-mandate agent: send it
+			// back to research with more budget and a new query strategy.
+			if needsExternal && len(sources) == 0 && retries < maxRetryRounds {
+				retries++
+				toolBudget += retryExtraSteps
+				msgs = append(msgs,
+					ai.Message{Role: "assistant", Content: out},
+					ai.Message{Role: "user", Content: "FINAL DITOLAK: kamu belum berhasil membuka SATU PUN sumber, padahal tugasmu butuh data eksternal. " +
+						"Riset ulang SEKARANG dengan strategi berbeda (percobaan " + strconv.Itoa(retries) + "/" + strconv.Itoa(maxRetryRounds) + ", budget tool ditambah): " +
+						"variasikan istilah → bahasa Inggris → perluas cakupan (Indonesia → Asia → global) → ganti sudut data yang masih relevan & kredibel. " +
+						`Balas satu objek JSON {"tool":"search",...}.`})
+				continue
+			}
 			final = firstNonEmpty(strings.TrimSpace(act.Final), strings.TrimSpace(out))
 			break
 		}
-		if toolUsed >= maxToolSteps {
+		if toolUsed >= toolBudget {
 			msgs = append(msgs,
 				ai.Message{Role: "assistant", Content: out},
-				ai.Message{Role: "user", Content: `Batas langkah tool tercapai. Balas SEKARANG dengan {"final":"..."} berisi analisis lengkapmu.`})
+				ai.Message{Role: "user", Content: `Batas langkah tool tercapai. Balas SEKARANG dengan {"final":"..."} berisi analisis lengkapmu.` +
+					" Bila tetap tanpa sumber terbuka, tulis eksplisit strategi pencarian yang sudah dicoba dan data alternatif apa yang disarankan dicari selanjutnya."})
 			continue
 		}
 		toolUsed++
@@ -455,7 +492,7 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 			results, err := ai.SearchWeb(r.Context(), act.Query, 6)
 			if err != nil {
 				steps = append(steps, deepStep{Tool: "search", Arg: act.Query, OK: false, Note: err.Error()})
-				msgs = append(msgs, ai.Message{Role: "user", Content: "HASIL TOOL search GAGAL: " + err.Error() + "\nLanjutkan: coba query lain, open URL yang sudah kamu tahu, atau balas final dari data internal."})
+				msgs = append(msgs, ai.Message{Role: "user", Content: "HASIL TOOL search GAGAL: " + err.Error() + "\nJANGAN berhenti — eskalasi: variasikan istilah / bahasa Inggris / perluas cakupan (Indonesia → Asia → global) / ganti sudut data yang masih relevan."})
 				continue
 			}
 			steps = append(steps, deepStep{Tool: "search", Arg: act.Query, OK: true, Note: strconv.Itoa(len(results)) + " hasil"})
@@ -469,7 +506,7 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 			text, err := ai.FetchPage(r.Context(), act.URL, 6000)
 			if err != nil {
 				steps = append(steps, deepStep{Tool: "open", Arg: act.URL, OK: false, Note: err.Error()})
-				msgs = append(msgs, ai.Message{Role: "user", Content: "HASIL TOOL open GAGAL: " + err.Error() + "\nLanjutkan: coba sumber lain atau balas final."})
+				msgs = append(msgs, ai.Message{Role: "user", Content: "HASIL TOOL open GAGAL: " + err.Error() + "\nJangan menyerah pada 1 URL — buka hasil search lain atau cari ulang dengan query berbeda."})
 				continue
 			}
 			steps = append(steps, deepStep{Tool: "open", Arg: act.URL, OK: true, Note: strconv.Itoa(len(text)) + " karakter"})
