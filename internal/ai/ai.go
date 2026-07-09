@@ -126,9 +126,28 @@ type chatResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
-	Error *struct {
+	// Ollama returns errors either as {"error":"msg"} (a plain string) or as
+	// the OpenAI shape {"error":{"message":"msg"}} — keep raw and parse both.
+	Error json.RawMessage `json:"error"`
+}
+
+// errMessage extracts a human-readable message from a raw error field that may
+// be a string, an object with "message", or arbitrary JSON.
+func errMessage(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var obj struct {
 		Message string `json:"message"`
-	} `json:"error"`
+	}
+	if json.Unmarshal(raw, &obj) == nil && obj.Message != "" {
+		return obj.Message
+	}
+	return string(raw)
 }
 
 // Chat sends the conversation (already including the system prompt) to the
@@ -181,9 +200,9 @@ func (c *Client) ChatModel(ctx context.Context, msgs []Message, modelOverride st
 		return "", fmt.Errorf("Ollama: gagal baca respons: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		msg := "status " + res.Status
-		if parsed.Error != nil {
-			msg = parsed.Error.Message
+		msg := errMessage(parsed.Error)
+		if msg == "" {
+			msg = "status " + res.Status
 		}
 		return "", fmt.Errorf("Ollama %d: %s", res.StatusCode, msg)
 	}
@@ -246,17 +265,15 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		Error json.RawMessage `json:"error"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
 		return nil, fmt.Errorf("Ollama: gagal baca daftar model: %w", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		msg := "status " + res.Status
-		if parsed.Error != nil {
-			msg = parsed.Error.Message
+		msg := errMessage(parsed.Error)
+		if msg == "" {
+			msg = "status " + res.Status
 		}
 		return nil, fmt.Errorf("Ollama %d: %s", res.StatusCode, msg)
 	}
