@@ -121,6 +121,41 @@ func (h *Handler) aiDeepSkills(w http.ResponseWriter, _ *http.Request) {
 
 // ---- Planner ----
 
+// ---- Domain (division) framing ----
+//
+// Deep Analysis started as a marketing (Meta Ads) pipeline; other divisions
+// reuse the same engine by sending `division` + `label` + a generic `data`
+// snapshot. Requests without a label keep the original Meta Ads wording so the
+// existing marketing UI is untouched.
+
+type deepDomain struct {
+	label    string // display name, e.g. "Sales"
+	subject  string // what is being analyzed, e.g. "kinerja divisi Sales"
+	dataHead string // heading for the snapshot block in prompts
+	scenario string // PKPSICOV SKENARIO line
+	caveat   string // domain-specific VALIDATION caveat ("" = none)
+}
+
+func deepDomainOf(division, label string) deepDomain {
+	l := strings.TrimSpace(label)
+	d := strings.ToLower(strings.TrimSpace(division))
+	if l == "" || d == "" || d == "marketing" || d == "meta" {
+		return deepDomain{
+			label:    "Marketing",
+			subject:  "iklan Meta Ads properti (Rupiah)",
+			dataHead: "DATA IKLAN META ADS (JSON, sumber kebenaran internal)",
+			scenario: "Kadep Marketing Greenpark butuh analisis mendalam iklan Meta (properti Indonesia, Rupiah). Data internal dilampirkan; riset eksternal via tools.",
+			caveat:   `"hasil" iklan = chat WA (bukan penjualan) → ROAS tak dapat dihitung; `,
+		}
+	}
+	return deepDomain{
+		label:    l,
+		subject:  "kinerja divisi " + l + " developer properti (Rupiah)",
+		dataHead: "DATA DASHBOARD DIVISI " + strings.ToUpper(l) + " (JSON, sumber kebenaran internal)",
+		scenario: "Kadep " + l + " Greenpark (developer properti Jabodetabek) butuh analisis mendalam kinerja divisinya (Rupiah). Data internal dilampirkan; riset eksternal via tools.",
+	}
+}
+
 // deepPlannedAgent is one research agent designed by the planner. Riset holds
 // suggested web-search queries the agent should start from.
 type deepPlannedAgent struct {
@@ -136,8 +171,12 @@ type deepPlannedAgent struct {
 
 type deepPlanRequest struct {
 	Model string          `json:"model"`
-	Ads   json.RawMessage `json:"ads"`
+	Ads   json.RawMessage `json:"ads"`  // marketing (legacy field name)
+	Data  json.RawMessage `json:"data"` // generic division snapshot
 	Focus string          `json:"focus"` // optional: user's research question
+	// Generic division framing; empty = marketing/Meta Ads (original behavior).
+	Division string `json:"division"`
+	Label    string `json:"label"`
 }
 
 type deepPlanResponse struct {
@@ -180,6 +219,39 @@ func defaultDeepPlan() []deepPlannedAgent {
 	}
 }
 
+// genericDeepPlan is the resilient fallback panel for non-marketing divisions.
+func genericDeepPlan(label string) []deepPlannedAgent {
+	return []deepPlannedAgent{
+		{Key: "kinerja", Title: "Analis Kinerja Internal", Icon: "📊",
+			Peranan:    "Analis senior kinerja " + label + " developer properti residensial Indonesia.",
+			Kompetensi: "Membaca KPI dashboard " + label + ": capaian vs target, tren, funnel/proses.",
+			Instruksi:  "Analisis capaian vs target dari data internal; identifikasi pemenang & masalah terbesar, hitung selisihnya dengan angka.",
+			Output:     "Temuan → Bukti → Implikasi → Rekomendasi berpoin, dengan angka. Maks 220 kata."},
+		{Key: "benchmark", Title: "Riset Benchmark Industri", Icon: "🌐",
+			Peranan:    "Analis riset industri properti residensial.",
+			Kompetensi: "Mencari & menilai benchmark kinerja " + label + " properti dari sumber kredibel.",
+			Instruksi:  "Cari benchmark eksternal yang relevan dengan metrik " + label + " (utamakan Indonesia/Asia, sebut tahun), lalu bandingkan dengan angka internal.",
+			Output:     "Tabel ringkas benchmark vs aktual + implikasi, dengan sitasi. Maks 220 kata.",
+			Riset:      []string{"benchmark " + strings.ToLower(label) + " developer properti residensial Indonesia 2026"}},
+		{Key: "pasar", Title: "Riset Pasar Properti", Icon: "🏘",
+			Peranan:    "Analis pasar properti residensial Indonesia.",
+			Kompetensi: "Tren permintaan rumah tapak, KPR/suku bunga, area Jabodetabek.",
+			Instruksi:  "Cari kondisi pasar terkini (suku bunga KPR, tren permintaan, insentif pemerintah) dan kaitkan dengan kinerja " + label + " Greenpark.",
+			Output:     "3-5 temuan pasar bersitasi + implikasi ke strategi " + label + ". Maks 220 kata.",
+			Riset:      []string{"suku bunga KPR Indonesia 2026", "tren pasar rumah tapak Jabodetabek 2026"}},
+		{Key: "risiko", Title: "Auditor Risiko & Kualitas Data", Icon: "⚠",
+			Peranan:    "Auditor operasional divisi " + label + ".",
+			Kompetensi: "Deteksi anomali, bottleneck proses, dan data yang tidak konsisten.",
+			Instruksi:  "Identifikasi risiko & anomali dari data internal (target meleset, tren memburuk, data kosong/janggal) dan dampaknya bila dibiarkan.",
+			Output:     "Daftar risiko berperingkat + bukti angka + mitigasi. Maks 220 kata."},
+		{Key: "aksi", Title: "Strategist Aksi & Prioritas", Icon: "🎯",
+			Peranan:    "Ahli strategi eksekusi divisi " + label + " developer properti.",
+			Kompetensi: "Menerjemahkan temuan jadi aksi prioritas dengan target angka.",
+			Instruksi:  "Susun rencana aksi spesifik (apa, siapa fokusnya, target angka, urutan prioritas) berdasarkan data + temuan agent lain.",
+			Output:     "Daftar aksi prioritas dengan target angka & metrik keberhasilan. Maks 220 kata."},
+	}
+}
+
 // aiDeepPlan lets the AI design the research panel (3–9 agents) for the given
 // snapshot, each with suggested web-research queries. Gated by requireAuth.
 func (h *Handler) aiDeepPlan(w http.ResponseWriter, r *http.Request) {
@@ -193,12 +265,13 @@ func (h *Handler) aiDeepPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skills, skillNames := loadDeepSkills()
+	dom := deepDomainOf(req.Division, req.Label)
 
 	var b strings.Builder
-	b.WriteString("Kamu adalah Head of Marketing Greenpark yang memimpin DEEP ANALYSIS: riset mendalam iklan Meta Ads properti (Rupiah) dengan panel agent riset.\n")
+	b.WriteString("Kamu adalah Head of " + dom.label + " Greenpark yang memimpin DEEP ANALYSIS: riset mendalam " + dom.subject + " dengan panel agent riset.\n")
 	b.WriteString("TUGASMU: merancang panel agent riset PALING RELEVAN untuk data & fokus di bawah. ")
 	b.WriteString("KAMU menentukan jumlah agent antara 3 sampai " + strconv.Itoa(maxDeepAgents) + " — sesuaikan kompleksitas data & fokus (data kompleks/fokus luas → panel besar; data sederhana → panel kecil), JANGAN paksakan jumlah tetap.\n")
-	b.WriteString("Organisasikan panel dalam beberapa kelompok kerja, misalnya: (1) performa data internal per dimensi (funnel, per-proyek, per-objective), (2) riset eksternal (benchmark industri, pasar properti Jabodetabek, kompetitor, tren musiman), (3) diagnosis kreatif & kualitas lead, (4) strategi aksi & realokasi. Boleh beberapa agent per kelompok bila datanya kaya.\n")
+	b.WriteString("Organisasikan panel dalam beberapa kelompok kerja, misalnya: (1) performa data internal per dimensi (funnel/proses, per-proyek, per-kategori), (2) riset eksternal (benchmark industri, pasar properti Jabodetabek, kompetitor, tren musiman), (3) diagnosis akar masalah & kualitas, (4) strategi aksi & prioritas. Boleh beberapa agent per kelompok bila datanya kaya.\n")
 	b.WriteString("Setiap agent bisa MERISET INTERNET (search + buka halaman) — untuk agent yang butuh data eksternal, isi `riset` dengan 1-3 query pencarian spesifik (sertakan tahun & konteks Indonesia/Jabodetabek). Agent yang murni analisis data internal boleh `riset` kosong.\n")
 	b.WriteString("Cakup minimal: performa data internal, benchmark/validasi eksternal, dan rekomendasi aksi.\n\n")
 	b.WriteString("Balas HANYA JSON valid (tanpa markdown/code fence), bentuk PERSIS:\n")
@@ -212,12 +285,15 @@ func (h *Handler) aiDeepPlan(w http.ResponseWriter, r *http.Request) {
 		}
 		b.WriteString("\nFOKUS/PERTANYAAN PENGGUNA (panel harus menjawab ini): " + focus + "\n")
 	}
-	ads := strings.TrimSpace(string(req.Ads))
-	if ads != "" && ads != "null" {
-		if len(ads) > maxContextChars {
-			ads = ads[:maxContextChars] + " …(dipotong)"
+	snap := strings.TrimSpace(string(req.Data))
+	if snap == "" || snap == "null" {
+		snap = strings.TrimSpace(string(req.Ads))
+	}
+	if snap != "" && snap != "null" {
+		if len(snap) > maxContextChars {
+			snap = snap[:maxContextChars] + " …(dipotong)"
 		}
-		b.WriteString("\nDATA IKLAN META ADS (JSON, sumber kebenaran):\n" + ads + "\n")
+		b.WriteString("\n" + dom.dataHead + ":\n" + snap + "\n")
 	}
 
 	msgs := []ai.Message{
@@ -231,7 +307,11 @@ func (h *Handler) aiDeepPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	agents := parseDeepPlan(out)
 	if len(agents) == 0 {
-		writeJSON(w, http.StatusOK, deepPlanResponse{Agents: defaultDeepPlan(), Skills: skillNames, Fallback: true})
+		fb := defaultDeepPlan()
+		if dom.label != "Marketing" {
+			fb = genericDeepPlan(dom.label)
+		}
+		writeJSON(w, http.StatusOK, deepPlanResponse{Agents: fb, Skills: skillNames, Fallback: true})
 		return
 	}
 	writeJSON(w, http.StatusOK, deepPlanResponse{Agents: agents, Skills: skillNames})
@@ -296,9 +376,13 @@ type deepStep struct {
 type deepAgentRequest struct {
 	Agent string          `json:"agent"`
 	Model string          `json:"model"`
-	Ads   json.RawMessage `json:"ads"`
+	Ads   json.RawMessage `json:"ads"`  // marketing (legacy field name)
+	Data  json.RawMessage `json:"data"` // generic division snapshot
 	Prior json.RawMessage `json:"prior"`
 	Focus string          `json:"focus"`
+	// Generic division framing; empty = marketing/Meta Ads (original behavior).
+	Division string `json:"division"`
+	Label    string `json:"label"`
 	// Inline frame from the planner (dynamic agents).
 	Title      string   `json:"title"`
 	Peranan    string   `json:"peranan"`
@@ -343,10 +427,10 @@ func parseDeepAction(out string) deepAction {
 
 // deepSynthesisFrame is the fixed finalizer: merges all researchers' outputs +
 // their cited sources into the executive dashboard JSON the frontend renders.
-func deepSynthesisFrame() metaAgentFrame {
+func deepSynthesisFrame(dom deepDomain) metaAgentFrame {
 	return metaAgentFrame{
-		title:      "Head of Marketing — Sintesis Deep Analysis",
-		peranan:    "Head of Marketing Greenpark yang memimpin seluruh agent riset di atas dan memutuskan untuk direksi.",
+		title:      "Head of " + dom.label + " — Sintesis Deep Analysis",
+		peranan:    "Head of " + dom.label + " Greenpark yang memimpin seluruh agent riset di atas dan memutuskan untuk direksi.",
 		kompetensi: "Menggabungkan analisis data internal + riset eksternal bersitasi menjadi satu dashboard eksekutif yang actionable.",
 		instruksi: `Sintesis SEMUA hasil agent riset + data + sumber jadi DASHBOARD EKSEKUTIF DEEP ANALYSIS.
 Balas HANYA JSON valid (tanpa markdown/code fence), bentuk:
@@ -375,15 +459,16 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	skills, _ := loadDeepSkills()
 	model := strings.TrimSpace(req.Model)
+	dom := deepDomainOf(req.Division, req.Label)
 
 	// ---- Synthesis: single grounded call, no tool loop. ----
 	if strings.EqualFold(strings.TrimSpace(req.Agent), "synthesis") {
-		ag := deepSynthesisFrame()
+		ag := deepSynthesisFrame(dom)
 		var b strings.Builder
-		b.WriteString("Kamu adalah finalizer DEEP ANALYSIS Marketing Greenpark. Bahasa Indonesia, berbasis angka — JANGAN mengarang data/sumber.\n\n")
-		writeFrame(&b, ag)
+		b.WriteString("Kamu adalah finalizer DEEP ANALYSIS " + dom.label + " Greenpark. Bahasa Indonesia, berbasis angka — JANGAN mengarang data/sumber.\n\n")
+		writeFrame(&b, ag, dom)
 		b.WriteString("\nSKILL (metodologi yang dipatuhi seluruh panel):\n" + skills + "\n")
-		writeDeepContext(&b, req, 26000)
+		writeDeepContext(&b, req, dom, 26000)
 		if len(req.Sources) > 0 {
 			if sj, err := json.Marshal(req.Sources); err == nil {
 				b.WriteString("\nSUMBER YANG DIPAKAI PARA AGENT (untuk sitasi):\n" + string(sj) + "\n")
@@ -416,9 +501,9 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var b strings.Builder
-	b.WriteString("Kamu adalah AGENT RISET dalam pipeline DEEP ANALYSIS Marketing Greenpark (iklan Meta Ads properti, Rupiah). ")
+	b.WriteString("Kamu adalah AGENT RISET dalam pipeline DEEP ANALYSIS " + dom.label + " Greenpark (" + dom.subject + "). ")
 	b.WriteString("Bahasa Indonesia, profesional, berbasis angka — JANGAN mengarang data/sumber.\n\n")
-	writeFrame(&b, ag)
+	writeFrame(&b, ag, dom)
 	b.WriteString("\nSKILL (WAJIB dipatuhi — metodologi & sumber kredibel):\n" + skills + "\n")
 	b.WriteString("\nTOOLS RISET INTERNET — tiap giliran balas HANYA SATU objek JSON (tanpa teks lain):\n")
 	b.WriteString(`- Cari web:    {"tool":"search","query":"query spesifik + tahun + Indonesia"}` + "\n")
@@ -433,7 +518,7 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 		b.WriteString("- Bila topik utama benar-benar buntu, PIVOT: cari data relevan terdekat yang kredibel dan tetap kaitkan ke tugasmu; sebutkan pivot itu eksplisit di final.\n")
 		b.WriteString("Saran query awal dari perencana: " + strings.Join(req.Riset, " | ") + "\n")
 	}
-	writeDeepContext(&b, req, 6000)
+	writeDeepContext(&b, req, dom, 6000)
 
 	msgs := []ai.Message{
 		{Role: "system", Content: b.String()},
@@ -526,31 +611,34 @@ func (h *Handler) aiDeepAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeFrame appends the PKPSICOV frame shared by all deep-analysis prompts.
-func writeFrame(b *strings.Builder, ag metaAgentFrame) {
+func writeFrame(b *strings.Builder, ag metaAgentFrame, dom deepDomain) {
 	b.WriteString("Kerangka PKPSICOV:\n")
 	b.WriteString("- PERANAN: " + ag.peranan + "\n")
 	b.WriteString("- KOMPETENSI: " + ag.kompetensi + "\n")
-	b.WriteString("- SKENARIO: Kadep Marketing Greenpark butuh analisis mendalam iklan Meta (properti Indonesia, Rupiah). Data internal dilampirkan; riset eksternal via tools.\n")
+	b.WriteString("- SKENARIO: " + dom.scenario + "\n")
 	b.WriteString("- INSTRUKSI: " + ag.instruksi + "\n")
 	b.WriteString("- CONSTRAINTS: Angka internal hanya dari data terlampir; klaim eksternal hanya dari halaman yang benar-benar dibuka. Rupiah (IDR). Tandai bila data kosong.\n")
 	b.WriteString("- OUTPUT: " + ag.output + "\n")
-	b.WriteString("- VALIDATION: \"hasil\" iklan = chat WA (bukan penjualan) → ROAS tak dapat dihitung; pisahkan fakta vs asumsi; akhiri dengan baris Keyakinan.\n")
+	b.WriteString("- VALIDATION: " + dom.caveat + "pisahkan fakta vs asumsi; akhiri dengan baris Keyakinan.\n")
 }
 
-// writeDeepContext appends focus + ads snapshot + prior outputs to the prompt.
-func writeDeepContext(b *strings.Builder, req deepAgentRequest, priorCap int) {
+// writeDeepContext appends focus + division snapshot + prior outputs to the prompt.
+func writeDeepContext(b *strings.Builder, req deepAgentRequest, dom deepDomain, priorCap int) {
 	if focus := strings.TrimSpace(req.Focus); focus != "" {
 		if len(focus) > 1500 {
 			focus = focus[:1500]
 		}
 		b.WriteString("\nFOKUS/PERTANYAAN PENGGUNA (jawab ini): " + focus + "\n")
 	}
-	ads := strings.TrimSpace(string(req.Ads))
-	if ads != "" && ads != "null" {
-		if len(ads) > maxContextChars {
-			ads = ads[:maxContextChars] + " …(dipotong)"
+	snap := strings.TrimSpace(string(req.Data))
+	if snap == "" || snap == "null" {
+		snap = strings.TrimSpace(string(req.Ads))
+	}
+	if snap != "" && snap != "null" {
+		if len(snap) > maxContextChars {
+			snap = snap[:maxContextChars] + " …(dipotong)"
 		}
-		b.WriteString("\nDATA IKLAN META ADS (JSON, sumber kebenaran internal):\n" + ads + "\n")
+		b.WriteString("\n" + dom.dataHead + ":\n" + snap + "\n")
 	}
 	prior := strings.TrimSpace(string(req.Prior))
 	if prior != "" && prior != "null" && prior != "{}" {
