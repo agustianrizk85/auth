@@ -47,6 +47,7 @@ var Departments = []struct{ Code, Name string }{
 	{"perencanaan", "Perencanaan"},
 	{"teknik", "Teknik"},
 	{"legalpermit", "Legal & Perizinan"},
+	{"cso", "CSO / Customer Complaint"},
 	{"departemen", "Departemen"},
 }
 
