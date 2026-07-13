@@ -55,5 +55,7 @@ func GreenparkRoster(depts []domain.Department) []service.CreateInput {
 		{Username: "keuangan@greenpark.id", Email: "keuangan@greenpark.id", Name: "Kepala Dept. Keuangan", Password: "keuangan123", Active: &active, Roles: r("finance", "kadep")},
 		// ── Teknik ──
 		{Username: "teknik@greenpark.id", Email: "teknik@greenpark.id", Name: "Kepala Dept. Teknik", Password: "teknik123", Active: &active, Roles: r("teknik", "kadep")},
+		// ── CSO (Customer Complaint) ──
+		{Username: "cso@greenpark.id", Email: "cso@greenpark.id", Name: "Kepala Dept. CSO", Password: "cso123", Active: &active, Roles: r("cso", "kadep")},
 	}
 }
