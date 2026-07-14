@@ -3,7 +3,9 @@
 // the two never drift. Passwords match each department backend's own seed so a
 // migrated dashboard can bridge to its native data token per logged-in person.
 // Role strings use each department's own vocabulary (kadep/arsitek/drafter/
-// staff/…) which the dashboard UI reads directly.
+// staff/…) which the dashboard UI reads directly. The directors (ceo/dirops)
+// are cross-division ROLES granted on every department, not auth super accounts;
+// the sole super account is the superadmin each entrypoint provisions itself.
 package bootstrap
 
 import (
@@ -14,20 +16,24 @@ import (
 // GreenparkRoster returns every initial account EXCEPT the auth superadmin,
 // which each entrypoint provisions its own way (Postgres via AUTH_BOOTSTRAP_*,
 // devserver inline). depts is the known department catalogue, used to grant the
-// directors viewer access across all divisions.
+// directors their cross-division role on every division. The directors are NOT
+// super accounts; the superadmin is the only super.
 func GreenparkRoster(depts []domain.Department) []service.CreateInput {
 	active := true
-	allViewer := map[string]domain.Role{}
-	for _, d := range depts {
-		allViewer[d.Code] = domain.RoleViewer
+	allRole := func(role string) map[string]domain.Role {
+		m := map[string]domain.Role{}
+		for _, d := range depts {
+			m[d.Code] = domain.Role(role)
+		}
+		return m
 	}
 	r := func(dept, role string) map[string]domain.Role {
 		return map[string]domain.Role{dept: domain.Role(role)}
 	}
 	return []service.CreateInput{
-		// ── Direktur (akses SEMUA divisi) ──
-		{Username: "ceo@greenpark.id", Email: "ceo@greenpark.id", Name: "Direktur Utama", Password: "ceo123", Active: &active, Roles: allViewer},
-		{Username: "dirops@greenpark.id", Email: "dirops@greenpark.id", Name: "Direktur Operasional", Password: "dirops123", Super: true, Active: &active},
+		// ── Direktur (akses SEMUA divisi via cross-division role, bukan super) ──
+		{Username: "ceo@greenpark.id", Email: "ceo@greenpark.id", Name: "Direktur Utama", Password: "ceo123", Active: &active, Roles: allRole("ceo")},
+		{Username: "dirops@greenpark.id", Email: "dirops@greenpark.id", Name: "Direktur Operasional", Password: "dirops123", Active: &active, Roles: allRole("dirops")},
 		// ── Perencanaan ──
 		{Username: "kadep", Name: "Kepala Dept. Perencanaan", Password: "kadep123", Active: &active, Roles: r("perencanaan", "kadep")},
 		{Username: "randi", Name: "Surandi Yanda Saputra", Password: "randi123", Active: &active, Roles: r("perencanaan", "arsitek")},
@@ -53,6 +59,7 @@ func GreenparkRoster(depts []domain.Department) []service.CreateInput {
 		{Username: "viewer@greenpark.id", Email: "viewer@greenpark.id", Name: "Sales Viewer", Password: "viewer123", Active: &active, Roles: r("sales", "viewer")},
 		// ── Keuangan ──
 		{Username: "keuangan@greenpark.id", Email: "keuangan@greenpark.id", Name: "Kepala Dept. Keuangan", Password: "keuangan123", Active: &active, Roles: r("finance", "kadep")},
+		{Username: "purchasing@greenpark.id", Email: "purchasing@greenpark.id", Name: "Staff Purchasing", Password: "purchasing123", Active: &active, Roles: r("finance", "purchasing")},
 		// ── Teknik ──
 		{Username: "teknik@greenpark.id", Email: "teknik@greenpark.id", Name: "Kepala Dept. Teknik", Password: "teknik123", Active: &active, Roles: r("teknik", "kadep")},
 		// ── CSO (Customer Complaint) ──
