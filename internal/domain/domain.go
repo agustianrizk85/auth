@@ -60,6 +60,15 @@ type Department struct {
 	Name string `json:"name"`
 }
 
+// RoleDef is an entry in the role catalogue the super admin manages: the role
+// value stored on memberships plus a human-readable label and a sort order for
+// the admin UI. It is master data — distinct from a user's granted Role.
+type RoleDef struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Sort  int    `json:"sort"`
+}
+
 // RefreshToken is a long-lived, revocable credential used to mint new access
 // tokens. Only the SHA-256 hash of the secret is stored — never the secret.
 type RefreshToken struct {

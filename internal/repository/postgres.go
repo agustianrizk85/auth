@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS auth_departments (
 	code text PRIMARY KEY,
 	name text NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth_roles (
+	value text PRIMARY KEY,
+	label text NOT NULL,
+	sort  int  NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS auth_users (
 	id            text PRIMARY KEY,
 	username      text NOT NULL UNIQUE,
@@ -269,6 +274,43 @@ func (p *Postgres) ListDepartments(ctx context.Context) ([]domain.Department, er
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (p *Postgres) DeleteDepartment(ctx context.Context, code string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM auth_departments WHERE code=$1`, code)
+	return err
+}
+
+/* ------------------------------- roles ------------------------------- */
+
+func (p *Postgres) ListRoles(ctx context.Context) ([]domain.RoleDef, error) {
+	rows, err := p.db.QueryContext(ctx, `SELECT value, label, sort FROM auth_roles ORDER BY sort, value`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.RoleDef
+	for rows.Next() {
+		var r domain.RoleDef
+		if err := rows.Scan(&r.Value, &r.Label, &r.Sort); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) UpsertRole(ctx context.Context, r domain.RoleDef) error {
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO auth_roles (value, label, sort) VALUES ($1,$2,$3)
+		 ON CONFLICT (value) DO UPDATE SET label=EXCLUDED.label, sort=EXCLUDED.sort`,
+		r.Value, r.Label, r.Sort)
+	return err
+}
+
+func (p *Postgres) DeleteRole(ctx context.Context, value string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM auth_roles WHERE value=$1`, value)
+	return err
 }
 
 /* -------------------------- refresh tokens --------------------------- */

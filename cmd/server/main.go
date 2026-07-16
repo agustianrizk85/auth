@@ -63,6 +63,7 @@ func main() {
 	// cross-department demo accounts.
 	bootCtx, bootCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	seedDepartments(bootCtx, repo, deptList)
+	seedRoles(bootCtx, repo)
 	bootstrapSuperadmin(bootCtx, repo, userSvc, cfg)
 	seedGreenparkRoster(bootCtx, userSvc, deptList)
 	if cfg.SeedDemo {
@@ -135,6 +136,25 @@ func seedDepartments(ctx context.Context, repo repository.Repository, depts []do
 	for _, d := range depts {
 		if err := repo.UpsertDepartment(ctx, d); err != nil {
 			log.Printf("auth: seed department %q: %v", d.Code, err)
+		}
+	}
+}
+
+// seedRoles inserts the default role catalogue (master data) on first run when
+// the auth_roles table is empty, so the admin UI has a populated list. Once any
+// role exists (including super-admin edits) it is left untouched.
+func seedRoles(ctx context.Context, repo repository.Repository) {
+	existing, err := repo.ListRoles(ctx)
+	if err != nil {
+		log.Printf("auth: seed roles: list: %v", err)
+		return
+	}
+	if len(existing) > 0 {
+		return
+	}
+	for _, rd := range bootstrap.DefaultRoles() {
+		if err := repo.UpsertRole(ctx, rd); err != nil {
+			log.Printf("auth: seed role %q: %v", rd.Value, err)
 		}
 	}
 }

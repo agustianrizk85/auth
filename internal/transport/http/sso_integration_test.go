@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,7 @@ type memRepo struct {
 	users   map[string]domain.User         // id -> user (Roles populated)
 	byName  map[string]string              // lower(username) -> id
 	depts   map[string]domain.Department   // code -> dept
+	roles   map[string]domain.RoleDef      // value -> role def
 	refresh map[string]domain.RefreshToken // id -> token
 	byHash  map[string]string              // hash -> id
 }
@@ -37,6 +39,7 @@ func newMemRepo() *memRepo {
 		users:   map[string]domain.User{},
 		byName:  map[string]string{},
 		depts:   map[string]domain.Department{},
+		roles:   map[string]domain.RoleDef{},
 		refresh: map[string]domain.RefreshToken{},
 		byHash:  map[string]string{},
 	}
@@ -150,6 +153,43 @@ func (m *memRepo) ListDepartments(_ context.Context) ([]domain.Department, error
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+func (m *memRepo) DeleteDepartment(_ context.Context, code string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.depts, code)
+	return nil
+}
+
+func (m *memRepo) ListRoles(_ context.Context) ([]domain.RoleDef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.RoleDef, 0, len(m.roles))
+	for _, r := range m.roles {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Sort != out[j].Sort {
+			return out[i].Sort < out[j].Sort
+		}
+		return out[i].Value < out[j].Value
+	})
+	return out, nil
+}
+
+func (m *memRepo) UpsertRole(_ context.Context, r domain.RoleDef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roles[r.Value] = r
+	return nil
+}
+
+func (m *memRepo) DeleteRole(_ context.Context, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.roles, value)
+	return nil
 }
 
 func (m *memRepo) StoreRefresh(_ context.Context, t domain.RefreshToken) error {

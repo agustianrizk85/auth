@@ -34,6 +34,12 @@ type Repository interface {
 	// Department catalogue.
 	UpsertDepartment(ctx context.Context, d domain.Department) error
 	ListDepartments(ctx context.Context) ([]domain.Department, error)
+	DeleteDepartment(ctx context.Context, code string) error
+
+	// Role catalogue (master data managed by the super admin).
+	ListRoles(ctx context.Context) ([]domain.RoleDef, error)
+	UpsertRole(ctx context.Context, r domain.RoleDef) error
+	DeleteRole(ctx context.Context, value string) error
 
 	// Refresh tokens.
 	StoreRefresh(ctx context.Context, t domain.RefreshToken) error

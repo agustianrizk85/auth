@@ -27,6 +27,25 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	// identity store instead of a local seed.
 	mux.HandleFunc("GET /api/dept/{dept}/users", h.requireAuth(h.deptUsers))
 
+	// ---- messaging / Chat (any logged-in user): DMs + per-division channels ----
+	mux.HandleFunc("GET /api/messages/users", h.requireAuth(h.chatUsers))
+	mux.HandleFunc("GET /api/messages/conversations", h.requireAuth(h.chatConversations))
+	mux.HandleFunc("GET /api/messages/unread", h.requireAuth(h.chatUnread))
+	mux.HandleFunc("GET /api/messages/with/{userId}", h.requireAuth(h.chatThread))
+	mux.HandleFunc("POST /api/messages/with/{userId}", h.requireAuth(h.chatSend))
+	mux.HandleFunc("POST /api/messages/with/{userId}/file", h.requireAuth(h.chatSendFile))
+	mux.HandleFunc("POST /api/messages/with/{userId}/read", h.requireAuth(h.chatRead))
+	// Per-division channels (group chat scoped to a department's members).
+	mux.HandleFunc("GET /api/messages/channels", h.requireAuth(h.chatChannels))
+	mux.HandleFunc("GET /api/messages/channel/{code}", h.requireAuth(h.chatChannelThread))
+	mux.HandleFunc("POST /api/messages/channel/{code}", h.requireAuth(h.chatChannelSend))
+	mux.HandleFunc("POST /api/messages/channel/{code}/file", h.requireAuth(h.chatChannelSendFile))
+	mux.HandleFunc("POST /api/messages/channel/{code}/read", h.requireAuth(h.chatChannelRead))
+	// Attachment download (participant / channel-member only).
+	mux.HandleFunc("GET /api/messages/file/{attId}", h.requireAuth(h.chatFile))
+	// SSE realtime stream; token comes as a query param (EventSource can't set headers).
+	mux.HandleFunc("GET /api/messages/stream", h.chatStream)
+
 	// ---- cross-division AI assistant (any logged-in dashboard user) ----
 	mux.HandleFunc("GET /api/ai/config", h.requireAuth(h.aiConfigGet))
 	mux.HandleFunc("PUT /api/ai/config", h.requireAuth(h.aiConfigSet))
@@ -53,7 +72,13 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/ai/models", h.requireAuth(h.aiModels))
 
 	// ---- administration (super only) ----
+	// Master data: departments (divisi) + role catalogue.
 	mux.HandleFunc("GET /api/admin/departments", h.requireSuper(h.listDepartments))
+	mux.HandleFunc("POST /api/admin/departments", h.requireSuper(h.createDepartment))
+	mux.HandleFunc("DELETE /api/admin/departments/{code}", h.requireSuper(h.deleteDepartment))
+	mux.HandleFunc("GET /api/admin/roles", h.requireSuper(h.listRoles))
+	mux.HandleFunc("POST /api/admin/roles", h.requireSuper(h.createRole))
+	mux.HandleFunc("DELETE /api/admin/roles/{value}", h.requireSuper(h.deleteRole))
 	mux.HandleFunc("GET /api/admin/users", h.requireSuper(h.listUsers))
 	mux.HandleFunc("POST /api/admin/users", h.requireSuper(h.createUser))
 	mux.HandleFunc("GET /api/admin/users/{id}", h.requireSuper(h.getUser))

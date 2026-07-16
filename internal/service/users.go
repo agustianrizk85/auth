@@ -18,6 +18,12 @@ var (
 	ErrPasswordTooShort = errors.New("password minimal 6 karakter")
 	ErrInvalidRole      = errors.New("role tidak valid (admin atau viewer)")
 	ErrUnknownDept      = errors.New("departemen tidak dikenal")
+
+	// Master-data validation (departments & role catalogue).
+	ErrDeptCodeRequired  = errors.New("kode departemen wajib diisi")
+	ErrDeptNameRequired  = errors.New("nama departemen wajib diisi")
+	ErrRoleValueRequired = errors.New("value role wajib diisi")
+	ErrRoleLabelRequired = errors.New("label role wajib diisi")
 )
 
 // Users is the admin service for managing accounts and their department roles.
@@ -234,6 +240,55 @@ func (s *Users) RemoveRole(ctx context.Context, userID, dept string) error {
 // Departments returns the known department catalogue.
 func (s *Users) Departments(ctx context.Context) ([]domain.Department, error) {
 	return s.repo.ListDepartments(ctx)
+}
+
+// SaveDepartment upserts a department into the catalogue (super-admin master
+// data). Both code and name are required.
+func (s *Users) SaveDepartment(ctx context.Context, d domain.Department) (domain.Department, error) {
+	d.Code = strings.TrimSpace(d.Code)
+	d.Name = strings.TrimSpace(d.Name)
+	if d.Code == "" {
+		return domain.Department{}, ErrDeptCodeRequired
+	}
+	if d.Name == "" {
+		return domain.Department{}, ErrDeptNameRequired
+	}
+	if err := s.repo.UpsertDepartment(ctx, d); err != nil {
+		return domain.Department{}, err
+	}
+	return d, nil
+}
+
+// DeleteDepartment removes a department from the catalogue.
+func (s *Users) DeleteDepartment(ctx context.Context, code string) error {
+	return s.repo.DeleteDepartment(ctx, strings.TrimSpace(code))
+}
+
+// RolesCatalog returns the role catalogue the super admin manages (ordered by
+// sort then value).
+func (s *Users) RolesCatalog(ctx context.Context) ([]domain.RoleDef, error) {
+	return s.repo.ListRoles(ctx)
+}
+
+// SaveRoleDef upserts a role catalogue entry. Value and label are required.
+func (s *Users) SaveRoleDef(ctx context.Context, r domain.RoleDef) (domain.RoleDef, error) {
+	r.Value = strings.TrimSpace(r.Value)
+	r.Label = strings.TrimSpace(r.Label)
+	if r.Value == "" {
+		return domain.RoleDef{}, ErrRoleValueRequired
+	}
+	if r.Label == "" {
+		return domain.RoleDef{}, ErrRoleLabelRequired
+	}
+	if err := s.repo.UpsertRole(ctx, r); err != nil {
+		return domain.RoleDef{}, err
+	}
+	return r, nil
+}
+
+// DeleteRoleDef removes a role catalogue entry.
+func (s *Users) DeleteRoleDef(ctx context.Context, value string) error {
+	return s.repo.DeleteRole(ctx, strings.TrimSpace(value))
 }
 
 func (s *Users) validateRoles(roles map[string]domain.Role) error {

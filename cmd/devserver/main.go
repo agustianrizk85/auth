@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,12 @@ func main() {
 		dd := domain.Department{Code: d.Code, Name: d.Name}
 		deptList = append(deptList, dd)
 		_ = repo.UpsertDepartment(ctx, dd)
+	}
+	// Seed the role catalogue (master data) when empty — mirrors cmd/server.
+	if existing, _ := repo.ListRoles(ctx); len(existing) == 0 {
+		for _, rd := range bootstrap.DefaultRoles() {
+			_ = repo.UpsertRole(ctx, rd)
+		}
 	}
 
 	authSvc := service.NewAuth(repo, signer, cfg.Issuer, accessTTL, cfg.RefreshTTL, nil)
@@ -123,6 +130,7 @@ type memRepo struct {
 	users   map[string]domain.User
 	byName  map[string]string
 	depts   map[string]domain.Department
+	roles   map[string]domain.RoleDef
 	refresh map[string]domain.RefreshToken
 	byHash  map[string]string
 }
@@ -132,6 +140,7 @@ func newMemRepo() *memRepo {
 		users:   map[string]domain.User{},
 		byName:  map[string]string{},
 		depts:   map[string]domain.Department{},
+		roles:   map[string]domain.RoleDef{},
 		refresh: map[string]domain.RefreshToken{},
 		byHash:  map[string]string{},
 	}
@@ -245,6 +254,43 @@ func (m *memRepo) ListDepartments(_ context.Context) ([]domain.Department, error
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+func (m *memRepo) DeleteDepartment(_ context.Context, code string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.depts, code)
+	return nil
+}
+
+func (m *memRepo) ListRoles(_ context.Context) ([]domain.RoleDef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.RoleDef, 0, len(m.roles))
+	for _, r := range m.roles {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Sort != out[j].Sort {
+			return out[i].Sort < out[j].Sort
+		}
+		return out[i].Value < out[j].Value
+	})
+	return out, nil
+}
+
+func (m *memRepo) UpsertRole(_ context.Context, r domain.RoleDef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roles[r.Value] = r
+	return nil
+}
+
+func (m *memRepo) DeleteRole(_ context.Context, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.roles, value)
+	return nil
 }
 
 func (m *memRepo) StoreRefresh(_ context.Context, t domain.RefreshToken) error {

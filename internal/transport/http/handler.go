@@ -20,11 +20,12 @@ type Handler struct {
 	users  *service.Users
 	signer *token.Signer
 	ai     *ai.Client // cross-division dashboard assistant (nil = disabled)
+	chat   *chatStore // in-memory direct-messaging store (Chat)
 }
 
 // NewHandler creates a Handler bound to the services and the token signer.
 func NewHandler(auth *service.Auth, users *service.Users, signer *token.Signer) *Handler {
-	return &Handler{auth: auth, users: users, signer: signer}
+	return &Handler{auth: auth, users: users, signer: signer, chat: newChatStore()}
 }
 
 // SetAI attaches the OpenRouter chat client that backs POST /api/ai/chat.
@@ -96,7 +97,11 @@ func statusForServiceErr(err error) int {
 		errors.Is(err, service.ErrPasswordRequired),
 		errors.Is(err, service.ErrPasswordTooShort),
 		errors.Is(err, service.ErrInvalidRole),
-		errors.Is(err, service.ErrUnknownDept):
+		errors.Is(err, service.ErrUnknownDept),
+		errors.Is(err, service.ErrDeptCodeRequired),
+		errors.Is(err, service.ErrDeptNameRequired),
+		errors.Is(err, service.ErrRoleValueRequired),
+		errors.Is(err, service.ErrRoleLabelRequired):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -332,6 +337,75 @@ func (h *Handler) listDepartments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, depts)
+}
+
+/* ------------------------ admin: master data ----------------------- */
+
+type deptReq struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// createDepartment upserts a department into the catalogue (super only).
+func (h *Handler) createDepartment(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[deptReq](w, r)
+	if !ok {
+		return
+	}
+	d, err := h.users.SaveDepartment(r.Context(), domain.Department{Code: req.Code, Name: req.Name})
+	if err != nil {
+		writeError(w, statusForServiceErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// deleteDepartment removes a department from the catalogue (super only).
+func (h *Handler) deleteDepartment(w http.ResponseWriter, r *http.Request) {
+	if err := h.users.DeleteDepartment(r.Context(), r.PathValue("code")); err != nil {
+		writeError(w, statusForServiceErr(err), err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type roleDefReq struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Sort  int    `json:"sort"`
+}
+
+// listRoles returns the role catalogue (super only).
+func (h *Handler) listRoles(w http.ResponseWriter, r *http.Request) {
+	roles, err := h.users.RolesCatalog(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, roles)
+}
+
+// createRole upserts a role catalogue entry (super only).
+func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[roleDefReq](w, r)
+	if !ok {
+		return
+	}
+	rd, err := h.users.SaveRoleDef(r.Context(), domain.RoleDef{Value: req.Value, Label: req.Label, Sort: req.Sort})
+	if err != nil {
+		writeError(w, statusForServiceErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rd)
+}
+
+// deleteRole removes a role catalogue entry (super only).
+func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
+	if err := h.users.DeleteRoleDef(r.Context(), r.PathValue("value")); err != nil {
+		writeError(w, statusForServiceErr(err), err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // toRoleMap converts the wire string roles into typed domain roles. Invalid
