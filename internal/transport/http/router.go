@@ -26,6 +26,10 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	// Lets a department dashboard build its staff / PIC list from the central
 	// identity store instead of a local seed.
 	mux.HandleFunc("GET /api/dept/{dept}/users", h.requireAuth(h.deptUsers))
+	// ---- department catalogue (any logged-in user) ----
+	// Lets a dashboard build its "output to division" list from the central
+	// department catalogue instead of a hardcoded list.
+	mux.HandleFunc("GET /api/departments", h.requireAuth(h.listDepartments))
 
 	// ---- messaging / Chat (any logged-in user): DMs + per-division channels ----
 	mux.HandleFunc("GET /api/messages/users", h.requireAuth(h.chatUsers))
@@ -50,6 +54,8 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/ai/config", h.requireAuth(h.aiConfigGet))
 	mux.HandleFunc("PUT /api/ai/config", h.requireAuth(h.aiConfigSet))
 	mux.HandleFunc("POST /api/ai/chat", h.requireAuth(h.aiChat))
+	// Vision proxy — central key stays here; perencanaan Deep Revisi calls this.
+	mux.HandleFunc("POST /api/ai/vision", h.requireAuth(h.aiVision))
 	// ---- AI orchestrator: 5-stage cross-division pipeline (directors) ----
 	mux.HandleFunc("POST /api/ai/orchestrate", h.requireAuth(h.aiOrchestrate))
 	// ---- Meta Ads multi-agent PKPSICOV generator (marketing) ----

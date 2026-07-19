@@ -26,6 +26,11 @@ const defaultEndpoint = "https://ollama.com/v1/chat/completions"
 // defaultModel is a strong general model available on Ollama Cloud.
 const defaultModel = "glm-5.2:cloud"
 
+// defaultVisionModel is a multimodal model used by perencanaan's Deep Revisi AI
+// (reads gambar-kerja images). Separate from the general text model above; both
+// share the ONE central key.
+const defaultVisionModel = "qwen3.5:397b"
+
 // Message is one chat turn (role: system | user | assistant).
 type Message struct {
 	Role    string `json:"role"`
@@ -35,12 +40,13 @@ type Message struct {
 // Client calls Ollama Cloud chat completions. The API key and model are mutable
 // at runtime (set from the dashboard UI) and optionally persisted to a file.
 type Client struct {
-	mu       sync.RWMutex
-	key      string
-	model    string
-	endpoint string
-	keyFile  string // optional persistence path ("" = in-memory only)
-	http     *http.Client
+	mu          sync.RWMutex
+	key         string
+	model       string // general text model (assistant, orchestrator, …)
+	visionModel string // multimodal model for perencanaan Deep Revisi
+	endpoint    string
+	keyFile     string // optional persistence path ("" = in-memory only)
+	http        *http.Client
 }
 
 // New builds a client. It is always non-nil; Configured() reports usability.
@@ -53,10 +59,11 @@ func New(key, model, endpoint string) *Client {
 		endpoint = defaultEndpoint
 	}
 	return &Client{
-		key:      strings.TrimSpace(key),
-		model:    model,
-		endpoint: endpoint,
-		http:     &http.Client{Timeout: 110 * time.Second},
+		key:         strings.TrimSpace(key),
+		model:       model,
+		visionModel: defaultVisionModel,
+		endpoint:    endpoint,
+		http:        &http.Client{Timeout: 110 * time.Second},
 	}
 }
 
@@ -88,11 +95,41 @@ func (c *Client) Configured() bool {
 	return c.key != ""
 }
 
-// Model returns the active model id.
+// Model returns the active general model id.
 func (c *Client) Model() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.model
+}
+
+// VisionModel returns the model used for multimodal (Deep Revisi) calls.
+func (c *Client) VisionModel() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.visionModel == "" {
+		return defaultVisionModel
+	}
+	return c.visionModel
+}
+
+// SetVisionModel updates the vision model at runtime (from the admin UI). Empty
+// leaves it unchanged.
+func (c *Client) SetVisionModel(m string) {
+	if m = strings.TrimSpace(m); m != "" {
+		c.mu.Lock()
+		c.visionModel = m
+		c.mu.Unlock()
+	}
+}
+
+// SetModel updates the general model WITHOUT touching the key (unlike SetKey).
+// Empty leaves it unchanged.
+func (c *Client) SetModel(m string) {
+	if m = strings.TrimSpace(m); m != "" {
+		c.mu.Lock()
+		c.model = m
+		c.mu.Unlock()
+	}
 }
 
 // SetKey updates the API key at runtime (and persists it when a key-file is
@@ -188,6 +225,88 @@ func (c *Client) ChatModel(ctx context.Context, msgs []Message, modelOverride st
 	httpReq.Header.Set("Authorization", "Bearer "+key)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Title", "Greenpark Dashboard AI")
+
+	res, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+
+	var parsed chatResponse
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("Ollama: gagal baca respons: %w", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		msg := errMessage(parsed.Error)
+		if msg == "" {
+			msg = "status " + res.Status
+		}
+		return "", fmt.Errorf("Ollama %d: %s", res.StatusCode, msg)
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("Ollama: respons kosong")
+	}
+	return stripThink(parsed.Choices[0].Message.Content), nil
+}
+
+/* ---- Vision (multimodal) — used by perencanaan's Deep Revisi AI proxy ----- */
+
+type visionImageURL struct {
+	URL string `json:"url"`
+}
+type visionPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *visionImageURL `json:"image_url,omitempty"`
+}
+type visionMessage struct {
+	Role    string       `json:"role"`
+	Content []visionPart `json:"content"`
+}
+type visionRequest struct {
+	Model       string          `json:"model"`
+	Messages    []visionMessage `json:"messages"`
+	Temperature float64         `json:"temperature"`
+	MaxTokens   int             `json:"max_tokens"`
+	Stream      bool            `json:"stream"`
+}
+
+// CompleteVision sends ONE user message (a text prompt + one or more images) to
+// a vision-capable model, using the centrally-configured key. `images` are data
+// URLs (data:image/png;base64,…). `model` overrides the client's default text
+// model for this call (Deep Revisi passes a vision model). The key never leaves
+// this service — callers proxy through here instead of holding the key.
+func (c *Client) CompleteVision(ctx context.Context, model, prompt string, images []string) (string, error) {
+	c.mu.RLock()
+	key, visModel, endpoint := c.key, c.visionModel, c.endpoint
+	c.mu.RUnlock()
+	if key == "" {
+		return "", fmt.Errorf("Ollama belum dikonfigurasi (set API key)")
+	}
+	if strings.TrimSpace(model) == "" {
+		model = visModel
+		if model == "" {
+			model = defaultVisionModel
+		}
+	}
+
+	parts := make([]visionPart, 0, len(images)+1)
+	parts = append(parts, visionPart{Type: "text", Text: prompt})
+	for _, img := range images {
+		parts = append(parts, visionPart{Type: "image_url", ImageURL: &visionImageURL{URL: img}})
+	}
+	reqBody, _ := json.Marshal(visionRequest{
+		Model: model, Temperature: 0.3, MaxTokens: 1500, Stream: false,
+		Messages: []visionMessage{{Role: "user", Content: parts}},
+	})
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+key)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Title", "Greenpark Deep Revisi AI")
 
 	res, err := c.http.Do(httpReq)
 	if err != nil {

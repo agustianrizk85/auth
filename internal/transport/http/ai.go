@@ -28,10 +28,12 @@ type aiChatResponse struct {
 }
 
 // aiConfigStatus reports whether the assistant has a usable key (never returns
-// the key itself).
+// the key itself) plus BOTH models: the general text model and the vision model
+// used by perencanaan's Deep Revisi AI.
 type aiConfigStatus struct {
-	Configured bool   `json:"configured"`
-	Model      string `json:"model"`
+	Configured  bool   `json:"configured"`
+	Model       string `json:"model"`
+	VisionModel string `json:"visionModel"`
 }
 
 // aiConfigGet returns the current AI configuration status (for the UI to decide
@@ -41,30 +43,76 @@ func (h *Handler) aiConfigGet(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, aiConfigStatus{Configured: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, aiConfigStatus{Configured: h.ai.Configured(), Model: h.ai.Model()})
+	writeJSON(w, http.StatusOK, aiConfigStatus{
+		Configured:  h.ai.Configured(),
+		Model:       h.ai.Model(),
+		VisionModel: h.ai.VisionModel(),
+	})
 }
 
-// aiConfigSet updates the OpenRouter API key (and optionally model) at runtime,
-// set from the dashboard UI. Persisted by the client when a key-file is set.
+// aiConfigSet updates the API key and/or the two models at runtime, set from the
+// admin UI. The key is persisted (key-file); models are in-memory. Any field may
+// be omitted: e.g. change only the vision model without re-entering the key.
 func (h *Handler) aiConfigSet(w http.ResponseWriter, r *http.Request) {
 	if h.ai == nil {
 		writeError(w, http.StatusServiceUnavailable, "AI client tidak aktif")
 		return
 	}
 	var req struct {
-		Key   string `json:"key"`
-		Model string `json:"model"`
+		Key         string `json:"key"`
+		Model       string `json:"model"`
+		VisionModel string `json:"visionModel"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Key) == "" {
-		writeError(w, http.StatusBadRequest, "API key kosong")
+	key := strings.TrimSpace(req.Key)
+	if key == "" && strings.TrimSpace(req.Model) == "" && strings.TrimSpace(req.VisionModel) == "" {
+		writeError(w, http.StatusBadRequest, "tidak ada yang diubah (isi key / model / model vision)")
 		return
 	}
-	h.ai.SetKey(req.Key, req.Model)
-	writeJSON(w, http.StatusOK, aiConfigStatus{Configured: h.ai.Configured(), Model: h.ai.Model()})
+	if key != "" {
+		h.ai.SetKey(key, req.Model) // sets key + general model together
+	} else {
+		h.ai.SetModel(req.Model) // update general model without touching the key
+	}
+	h.ai.SetVisionModel(req.VisionModel)
+	writeJSON(w, http.StatusOK, aiConfigStatus{
+		Configured:  h.ai.Configured(),
+		Model:       h.ai.Model(),
+		VisionModel: h.ai.VisionModel(),
+	})
+}
+
+// aiVision proxies a vision (multimodal) completion using the CENTRAL Ollama
+// key — so services like perencanaan's Deep Revisi AI can read gambar-kerja
+// images without ever holding the key. Gated by requireAuth.
+func (h *Handler) aiVision(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil || !h.ai.Configured() {
+		writeError(w, http.StatusServiceUnavailable, "Kunci AI belum diset — atur di Panel Admin (Kunci AI)")
+		return
+	}
+	var req struct {
+		Model  string   `json:"model"`
+		Prompt string   `json:"prompt"`
+		Images []string `json:"images"`
+	}
+	// Images are base64 data URLs (a couple of rasterised PDF pages) — allow room.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 40<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
+		return
+	}
+	if len(req.Images) == 0 {
+		writeError(w, http.StatusBadRequest, "tidak ada gambar")
+		return
+	}
+	content, err := h.ai.CompleteVision(r.Context(), req.Model, req.Prompt, req.Images)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
 }
 
 // aiChat answers a dashboard question grounded on the current page's data.
