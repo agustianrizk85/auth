@@ -76,6 +76,8 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("POST /api/ai/analyze-plan", h.requireAuth(h.aiAnalyzePlan))
 	mux.HandleFunc("POST /api/ai/analyze-agent", h.requireAuth(h.aiAnalyzeAgent))
 	mux.HandleFunc("GET /api/ai/models", h.requireAuth(h.aiModels))
+	// Katalog Model AI kurasi (read-only) — dipakai modul divisi (AI › Model).
+	mux.HandleFunc("GET /api/ai/model-catalog", h.requireAuth(h.aiModelCatalog))
 
 	// ---- administration (super only) ----
 	// Master data: departments (divisi) + role catalogue.

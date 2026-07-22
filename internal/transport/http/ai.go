@@ -45,6 +45,17 @@ func (h *Handler) aiCatalogList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, h.ai.Catalog())
 }
 
+// aiModelCatalog returns the curated model catalogue READ-ONLY for any logged-in
+// dashboard user — division modules show it under "AI › Model". Editing stays in
+// Panel Admin (super-only, aiCatalog* above).
+func (h *Handler) aiModelCatalog(w http.ResponseWriter, _ *http.Request) {
+	if h.ai == nil {
+		writeJSON(w, http.StatusOK, []ai.AIModel{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.ai.Catalog())
+}
+
 // aiCatalogUpsert adds or updates one model in the catalogue (matched by name).
 func (h *Handler) aiCatalogUpsert(w http.ResponseWriter, r *http.Request) {
 	if h.ai == nil {
