@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"greenpark/auth/internal/ai"
+	"greenpark/auth/internal/token"
 )
 
 // maxContextChars caps the grounding payload embedded in the prompt so a heavy
@@ -43,6 +44,65 @@ func (h *Handler) aiCatalogList(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.ai.Catalog())
+}
+
+// aiDivisionModelGet returns a division's chosen text+vision models plus the
+// effective (resolved) ones — so the division's AI › Model picker can show both
+// the choice and the fallback default.
+func (h *Handler) aiDivisionModelGet(w http.ResponseWriter, r *http.Request) {
+	div := strings.TrimSpace(r.URL.Query().Get("division"))
+	if h.ai == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"division": div})
+		return
+	}
+	dm := h.ai.DivisionModel(div)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"division":        div,
+		"text":            dm.Text,
+		"vision":          dm.Vision,
+		"effectiveText":   h.ai.ModelForDivision(div),
+		"effectiveVision": h.ai.VisionModelForDivision(div),
+	})
+}
+
+// aiDivisionModelSet stores a division's model choice. Allowed for a superadmin
+// or a user holding a role in that division (the Kadep of the division). Empty
+// text/vision reverts to the global default.
+func (h *Handler) aiDivisionModelSet(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI client tidak aktif")
+		return
+	}
+	var req struct {
+		Division string `json:"division"`
+		Text     string `json:"text"`
+		Vision   string `json:"vision"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
+		return
+	}
+	div := strings.TrimSpace(req.Division)
+	if div == "" {
+		writeError(w, http.StatusBadRequest, "division wajib diisi")
+		return
+	}
+	c, _ := r.Context().Value(claimsCtxKey).(token.Claims)
+	if !c.Super {
+		if _, ok := c.Roles[strings.ToLower(div)]; !ok {
+			writeError(w, http.StatusForbidden, "hanya divisi Anda sendiri yang bisa diatur")
+			return
+		}
+	}
+	h.ai.SetDivisionModel(div, req.Text, req.Vision)
+	dm := h.ai.DivisionModel(div)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"division":        div,
+		"text":            dm.Text,
+		"vision":          dm.Vision,
+		"effectiveText":   h.ai.ModelForDivision(div),
+		"effectiveVision": h.ai.VisionModelForDivision(div),
+	})
 }
 
 // aiModelCatalog returns the curated model catalogue READ-ONLY for any logged-in
@@ -147,9 +207,10 @@ func (h *Handler) aiVision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Model  string   `json:"model"`
-		Prompt string   `json:"prompt"`
-		Images []string `json:"images"`
+		Model    string   `json:"model"`
+		Division string   `json:"division"` // resolve this division's vision model when Model is empty
+		Prompt   string   `json:"prompt"`
+		Images   []string `json:"images"`
 	}
 	// Images are base64 data URLs (a couple of rasterised PDF pages) — allow room.
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 40<<20)).Decode(&req); err != nil {
@@ -159,6 +220,11 @@ func (h *Handler) aiVision(w http.ResponseWriter, r *http.Request) {
 	if len(req.Images) == 0 {
 		writeError(w, http.StatusBadRequest, "tidak ada gambar")
 		return
+	}
+	// Per-division vision model: an explicit Model wins; else the division's
+	// chosen vision model (AI › Model), else the global default.
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = h.ai.VisionModelForDivision(req.Division)
 	}
 	content, err := h.ai.CompleteVision(r.Context(), req.Model, req.Prompt, req.Images)
 	if err != nil {
@@ -201,7 +267,8 @@ func (h *Handler) aiChat(w http.ResponseWriter, r *http.Request) {
 
 	msgs := append([]ai.Message{{Role: "system", Content: buildSystemPrompt(req)}}, turns...)
 
-	reply, err := h.ai.Chat(r.Context(), msgs)
+	// Asisten pakai model TEKS divisi ini (AI › Model); fallback ke default global.
+	reply, err := h.ai.ChatModel(r.Context(), msgs, h.ai.ModelForDivision(req.Division))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "AI gagal menjawab: "+err.Error())
 		return

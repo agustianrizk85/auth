@@ -97,8 +97,9 @@ func main() {
 	if catalogFile == "" {
 		catalogFile = filepath.Join(filepath.Dir(aiKeyFile), "ai-models.json")
 	}
+	divModelsFile := filepath.Join(filepath.Dir(aiKeyFile), "ai-division-models.json")
 	handler.SetAI(ai.New(aiKey, aiModel, os.Getenv("OLLAMA_ENDPOINT")).
-		WithPersist(aiKeyFile).WithCatalogPersist(catalogFile))
+		WithPersist(aiKeyFile).WithCatalogPersist(catalogFile).WithDivModelsPersist(divModelsFile))
 	router := httptransport.NewRouter(handler, cfg.Origins())
 
 	srv := &http.Server{

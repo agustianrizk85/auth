@@ -78,6 +78,9 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/ai/models", h.requireAuth(h.aiModels))
 	// Katalog Model AI kurasi (read-only) — dipakai modul divisi (AI › Model).
 	mux.HandleFunc("GET /api/ai/model-catalog", h.requireAuth(h.aiModelCatalog))
+	// Pilihan model per-divisi (teks + vision). GET semua login; PUT = Kadep divisi / super.
+	mux.HandleFunc("GET /api/ai/division-model", h.requireAuth(h.aiDivisionModelGet))
+	mux.HandleFunc("PUT /api/ai/division-model", h.requireAuth(h.aiDivisionModelSet))
 
 	// ---- administration (super only) ----
 	// Master data: departments (divisi) + role catalogue.

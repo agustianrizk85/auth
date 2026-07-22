@@ -48,7 +48,9 @@ type Client struct {
 	keyFile     string // optional persistence path ("" = in-memory only)
 	catalogFile string // optional JSON persistence path for the model catalogue
 	catalog     []AIModel
-	http        *http.Client
+	divModelsFile string // JSON persistence for per-division model choices
+	divModels     map[string]DivModel
+	http          *http.Client
 }
 
 // New builds a client. It is always non-nil; Configured() reports usability.
