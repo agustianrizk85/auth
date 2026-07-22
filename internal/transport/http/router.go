@@ -85,6 +85,10 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/admin/roles", h.requireSuper(h.listRoles))
 	mux.HandleFunc("POST /api/admin/roles", h.requireSuper(h.createRole))
 	mux.HandleFunc("DELETE /api/admin/roles/{value}", h.requireSuper(h.deleteRole))
+	// Katalog Model AI (nama · kepintaran · kegunaan · score).
+	mux.HandleFunc("GET /api/admin/models", h.requireSuper(h.aiCatalogList))
+	mux.HandleFunc("POST /api/admin/models", h.requireSuper(h.aiCatalogUpsert))
+	mux.HandleFunc("DELETE /api/admin/models/{name}", h.requireSuper(h.aiCatalogDelete))
 	mux.HandleFunc("GET /api/admin/users", h.requireSuper(h.listUsers))
 	mux.HandleFunc("POST /api/admin/users", h.requireSuper(h.createUser))
 	mux.HandleFunc("GET /api/admin/users/{id}", h.requireSuper(h.getUser))

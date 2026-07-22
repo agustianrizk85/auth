@@ -36,6 +36,48 @@ type aiConfigStatus struct {
 	VisionModel string `json:"visionModel"`
 }
 
+// aiCatalogList returns the admin-curated model catalogue (Panel Admin → Model AI).
+func (h *Handler) aiCatalogList(w http.ResponseWriter, _ *http.Request) {
+	if h.ai == nil {
+		writeJSON(w, http.StatusOK, []ai.AIModel{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.ai.Catalog())
+}
+
+// aiCatalogUpsert adds or updates one model in the catalogue (matched by name).
+func (h *Handler) aiCatalogUpsert(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI client tidak aktif")
+		return
+	}
+	var m ai.AIModel
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&m); err != nil {
+		writeError(w, http.StatusBadRequest, "body tidak valid: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(m.Name) == "" {
+		writeError(w, http.StatusBadRequest, "nama model wajib diisi")
+		return
+	}
+	if m.Score < 0 {
+		m.Score = 0
+	}
+	if m.Score > 100 {
+		m.Score = 100
+	}
+	writeJSON(w, http.StatusOK, h.ai.UpsertCatalogModel(m))
+}
+
+// aiCatalogDelete removes one model from the catalogue by name.
+func (h *Handler) aiCatalogDelete(w http.ResponseWriter, r *http.Request) {
+	if h.ai == nil {
+		writeJSON(w, http.StatusOK, []ai.AIModel{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.ai.RemoveCatalogModel(r.PathValue("name")))
+}
+
 // aiConfigGet returns the current AI configuration status (for the UI to decide
 // whether to prompt for a key).
 func (h *Handler) aiConfigGet(w http.ResponseWriter, _ *http.Request) {

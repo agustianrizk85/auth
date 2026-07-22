@@ -46,6 +46,8 @@ type Client struct {
 	visionModel string // multimodal model for perencanaan Deep Revisi
 	endpoint    string
 	keyFile     string // optional persistence path ("" = in-memory only)
+	catalogFile string // optional JSON persistence path for the model catalogue
+	catalog     []AIModel
 	http        *http.Client
 }
 

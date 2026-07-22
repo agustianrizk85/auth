@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -92,7 +93,12 @@ func main() {
 	if aiKeyFile == "" {
 		aiKeyFile = "data/ollama.key"
 	}
-	handler.SetAI(ai.New(aiKey, aiModel, os.Getenv("OLLAMA_ENDPOINT")).WithPersist(aiKeyFile))
+	catalogFile := os.Getenv("AI_MODELS_FILE")
+	if catalogFile == "" {
+		catalogFile = filepath.Join(filepath.Dir(aiKeyFile), "ai-models.json")
+	}
+	handler.SetAI(ai.New(aiKey, aiModel, os.Getenv("OLLAMA_ENDPOINT")).
+		WithPersist(aiKeyFile).WithCatalogPersist(catalogFile))
 	router := httptransport.NewRouter(handler, cfg.Origins())
 
 	srv := &http.Server{
