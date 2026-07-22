@@ -22,6 +22,8 @@ import (
 	"greenpark/auth/internal/config"
 	"greenpark/auth/internal/domain"
 	"greenpark/auth/internal/keys"
+	"greenpark/auth/internal/klausul"
+	"greenpark/auth/internal/kontraktor"
 	"greenpark/auth/internal/repository"
 	"greenpark/auth/internal/service"
 	"greenpark/auth/internal/token"
@@ -100,6 +102,18 @@ func main() {
 	divModelsFile := filepath.Join(filepath.Dir(aiKeyFile), "ai-division-models.json")
 	handler.SetAI(ai.New(aiKey, aiModel, os.Getenv("OLLAMA_ENDPOINT")).
 		WithPersist(aiKeyFile).WithCatalogPersist(catalogFile).WithDivModelsPersist(divModelsFile))
+	// Master klausul library (per-divisi), persisted alongside the AI data files.
+	klausulFile := os.Getenv("KLAUSUL_FILE")
+	if klausulFile == "" {
+		klausulFile = filepath.Join(filepath.Dir(aiKeyFile), "klausul.json")
+	}
+	handler.SetKlausul(klausul.New(klausulFile))
+	// Master kontraktor (terpusat), persisted alongside the other data files.
+	kontraktorFile := os.Getenv("KONTRAKTOR_FILE")
+	if kontraktorFile == "" {
+		kontraktorFile = filepath.Join(filepath.Dir(aiKeyFile), "kontraktor.json")
+	}
+	handler.SetKontraktor(kontraktor.New(kontraktorFile))
 	router := httptransport.NewRouter(handler, cfg.Origins())
 
 	srv := &http.Server{

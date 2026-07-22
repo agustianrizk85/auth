@@ -82,6 +82,18 @@ func NewRouter(h *Handler, allowOrigins []string) http.Handler {
 	mux.HandleFunc("GET /api/ai/division-model", h.requireAuth(h.aiDivisionModelGet))
 	mux.HandleFunc("PUT /api/ai/division-model", h.requireAuth(h.aiDivisionModelSet))
 
+	// ---- master klausul (library klausul per divisi) ----
+	// GET read-only untuk semua login; POST/DELETE = super atau Kadep divisi itu.
+	mux.HandleFunc("GET /api/klausul", h.requireAuth(h.klausulList))
+	mux.HandleFunc("POST /api/klausul", h.requireAuth(h.klausulUpsert))
+	mux.HandleFunc("DELETE /api/klausul/{id}", h.requireAuth(h.klausulDelete))
+
+	// ---- master kontraktor (terpusat, lintas divisi) ----
+	// GET read-only untuk semua login; POST/DELETE = super atau manajer (punya role).
+	mux.HandleFunc("GET /api/kontraktor", h.requireAuth(h.kontraktorList))
+	mux.HandleFunc("POST /api/kontraktor", h.requireAuth(h.kontraktorUpsert))
+	mux.HandleFunc("DELETE /api/kontraktor/{id}", h.requireAuth(h.kontraktorDelete))
+
 	// ---- administration (super only) ----
 	// Master data: departments (divisi) + role catalogue.
 	mux.HandleFunc("GET /api/admin/departments", h.requireSuper(h.listDepartments))

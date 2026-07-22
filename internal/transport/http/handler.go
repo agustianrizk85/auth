@@ -9,6 +9,8 @@ import (
 
 	"greenpark/auth/internal/ai"
 	"greenpark/auth/internal/domain"
+	"greenpark/auth/internal/klausul"
+	"greenpark/auth/internal/kontraktor"
 	"greenpark/auth/internal/repository"
 	"greenpark/auth/internal/service"
 	"greenpark/auth/internal/token"
@@ -19,8 +21,10 @@ type Handler struct {
 	auth   *service.Auth
 	users  *service.Users
 	signer *token.Signer
-	ai     *ai.Client // cross-division dashboard assistant (nil = disabled)
-	chat   *chatStore // in-memory direct-messaging store (Chat)
+	ai      *ai.Client     // cross-division dashboard assistant (nil = disabled)
+	chat       *chatStore        // in-memory direct-messaging store (Chat)
+	clauses    *klausul.Store    // master klausul library (nil = disabled)
+	kontraktor *kontraktor.Store // master kontraktor (nil = disabled)
 }
 
 // NewHandler creates a Handler bound to the services and the token signer.
@@ -31,6 +35,12 @@ func NewHandler(auth *service.Auth, users *service.Users, signer *token.Signer) 
 // SetAI attaches the OpenRouter chat client that backs POST /api/ai/chat.
 // Kept separate from NewHandler so existing call sites (and tests) are unchanged.
 func (h *Handler) SetAI(c *ai.Client) { h.ai = c }
+
+// SetKlausul attaches the master-clause library backing /api/klausul.
+func (h *Handler) SetKlausul(s *klausul.Store) { h.clauses = s }
+
+// SetKontraktor attaches the master-contractor list backing /api/kontraktor.
+func (h *Handler) SetKontraktor(s *kontraktor.Store) { h.kontraktor = s }
 
 /* ---------------------------- auth plumbing ---------------------------- */
 
